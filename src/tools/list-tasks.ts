@@ -25,10 +25,9 @@ export function registerListTasksTool(
         "Lists tasks as lean rows: { ref, id, title, done, priority?, due?, labels }. `ref` " +
         "(INFRA-41) is how every other tool addresses a task. Every matching task is returned " +
         "— the result is never paginated away — so filter by project unless you really want " +
-        "every task on the instance. One exception, and it is Vikunja's: tasks of archived " +
-        "projects are in no task listing at all, whatever the filter says. Read one of those " +
-        "by id with vikunja_get_task, or unarchive the project. Descriptions are not included; " +
-        "read one task with vikunja_get_task for that.",
+        "every task on the instance. Tasks of archived projects are never listed; read those " +
+        "by id with vikunja_get_task. Descriptions are not included; read one task with " +
+        "vikunja_get_task for that.",
       inputSchema: {
         project: z
           .string()
@@ -64,10 +63,10 @@ export function registerListTasksTool(
 /**
  * The project to narrow to, as an id, or undefined for "every project".
  *
- * Which of the two arguments was given is this layer's business; what a key means, whether a
- * bare number is one, and whether the project it names can answer a task query at all are the
- * resolver's. Hence the single call: everything that could be said about the key is said there,
- * once, for every tool that resolves one.
+ * Which of the two arguments was given is this layer's business. What a key means, whether a
+ * bare number is one, whether an id names anything, and whether the project either of them
+ * points at can answer a task query at all are the resolver's — so both inputs make one call
+ * each and neither can quietly become the more permissive path.
  */
 async function projectFilter(
   resolver: Resolver,
@@ -81,7 +80,7 @@ async function projectFilter(
   }
 
   if (projectId !== undefined) {
-    return projectId;
+    return resolver.checkProjectIdForTasks(projectId);
   }
 
   return project === undefined ? undefined : resolver.resolveProjectForTasks(project);

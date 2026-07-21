@@ -339,6 +339,52 @@ describe("Resolver", () => {
     await assert.rejects(() => new Resolver(client).resolveProjectKey("11"), /\{ projectId: 11 \}/);
   });
 
+  it("refuses to narrow a task query to an archived project id", async () => {
+    // The id escape hatch reached the same silent `[]` the key path used to, which would have
+    // left one tool telling two stories about one project depending on which input it was given.
+    const client = stubClient([project(20, "OLD", true)], []);
+
+    await assert.rejects(
+      () => new Resolver(client).checkProjectIdForTasks(20),
+      /is archived, and Vikunja does not list tasks of archived projects/,
+    );
+  });
+
+  it("accepts the id of a live project", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    assert.equal(await new Resolver(client).checkProjectIdForTasks(11), 11);
+  });
+
+  it("accepts the id of a project with no key, which is what the id hatch is for", async () => {
+    // The key map skips these; the id map must not, or the check would refuse exactly the
+    // projects the escape hatch exists to reach.
+    const client = stubClient([project(10, ""), ...PROJECTS], TASKS);
+
+    assert.equal(await new Resolver(client).checkProjectIdForTasks(10), 10);
+  });
+
+  it("refuses an id that names no project rather than letting it answer empty", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    await assert.rejects(
+      () => new Resolver(client).checkProjectIdForTasks(999),
+      /No project has id 999/,
+    );
+  });
+
+  it("reloads for an unknown id, picking up a project created since", async () => {
+    const projects = [...PROJECTS];
+    const client = stubClient(projects, TASKS);
+    const resolver = new Resolver(client, ALWAYS_RELOAD);
+
+    await resolver.resolveProjectKey("INFRA");
+    projects.push(project(12, "NEW"));
+
+    assert.equal(await resolver.checkProjectIdForTasks(12), 12);
+    assert.equal(client.calls.listProjects, 2);
+  });
+
   it("errors instead of returning another task when the server ignores the index term", async () => {
     const client = stubClient(PROJECTS, TASKS, { honoursIndex: false });
 
