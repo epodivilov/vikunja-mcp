@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Deliberately one job. Splitting build/typecheck/lint across jobs would win a few
+  # Deliberately one job. Splitting build/typecheck/test/lint across jobs would win a few
   # seconds of wall clock and pay for it with another runner boot and another `npm ci`
   # per job, which on a workflow this small is most of the bill.
   check:
@@ -25,19 +25,19 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          # The floor declared in package.json `engines` — CI should fail on anything
-          # the lowest supported runtime cannot handle.
-          node-version: "20"
+          # Above the `engines` floor of >=20 on purpose. `engines` constrains the runtime
+          # of the published package, which is plain compiled JS; this toolchain instead
+          # feeds .ts files straight to `node --test`, which needs the type stripping Node
+          # only added in 22.6 — on 20 the test step dies with ERR_UNKNOWN_FILE_EXTENSION.
+          node-version: "24"
           cache: npm
 
       - run: npm ci
 
-      # Build first: it is the fastest way to fail and it invalidates the checks below,
-      # so there is no point paying for them on a tree that does not compile.
+      # Build first: it is the cheapest failure to reach, and nothing below it means much
+      # on a tree that does not compile. Lint last so a formatting nit never gets to mask
+      # a broken build or a red test.
       - run: npm run build
       - run: npm run typecheck
+      - run: npm test
       - run: npm run lint
-
-      # TODO(VMCP-13): the test step goes here. `npm test` feeds .ts files straight to
-      # `node --test`, which needs type stripping from Node 22.6+ — running it means
-      # settling how the test runtime relates to the `engines` floor pinned above.
