@@ -1,0 +1,52 @@
+name: CI
+
+# `pull_request` only. The event already builds the merge commit, so a `push` trigger
+# on `main` would re-check a tree identical to the one that just passed on the PR and
+# bill a second set of minutes for the answer we already have.
+on: pull_request
+
+# A force-push makes the in-flight run answer a question nobody is asking any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Nothing here writes to the repo. Stated explicitly so the job stays read-only even if the
+# repo or org default is ever loosened.
+permissions:
+  contents: read
+
+jobs:
+  # Deliberately one job. Splitting build/typecheck/test/lint across jobs would win a few
+  # seconds of wall clock and pay for it with another runner boot and another `npm ci`
+  # per job, which on a workflow this small is most of the bill.
+  check:
+    runs-on: ubuntu-latest
+    # The job settles in well under a minute; the default ceiling is six hours. This caps
+    # what a hung install or a wedged test can bill, which is the same tail risk the rest
+    # of this file is written to avoid.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Nothing here needs history today. It is here so VMCP-16 can add
+          # `changeset status --since=origin/main` to this job without restructuring it.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          # Deliberately newer than the `engines` floor. That floor describes what the
+          # published package needs to run, which is plain compiled JS; CI additionally has
+          # to run the dev toolchain, and the tests reach `node --test` as .ts. So CI needs
+          # a Node that strips types — an older one dies with ERR_UNKNOWN_FILE_EXTENSION.
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      # Build first: it is the cheapest failure to reach, and nothing below it means much
+      # on a tree that does not compile. Lint last so a formatting nit never gets to mask
+      # a broken build or a red test.
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run lint
