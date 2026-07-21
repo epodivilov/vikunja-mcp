@@ -10,7 +10,8 @@ document traces back to one of them:
 
 1. **Raw payloads.** They return full Vikunja API objects (views, buckets, blur hashes,
    expanded owners). One real project listing measured ~95k characters. → We project to lean
-   DTOs and never leak a raw API object to the model. Measured against a live instance: 39x smaller on a project listing, 10x on a task listing.
+   DTOs and never leak a raw API object to the model. Measured against a live instance:
+   39x smaller on a project listing, 10x on a task listing.
 2. **No pagination.** They issue a single request and drop the `x-pagination-*` headers,
    silently truncating lists at 50. → The client follows `x-pagination-total-pages` and returns
    everything.

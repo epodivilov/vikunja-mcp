@@ -6,7 +6,15 @@
 import { Renderer, marked } from "marked";
 import TurndownService from "turndown";
 import { tables } from "turndown-plugin-gfm";
-import type { LeanLabel, LeanProject, LeanTask, LeanTaskDetail } from "./types.js";
+import type {
+  LeanLabel,
+  LeanProject,
+  LeanTask,
+  LeanTaskDetail,
+  RawLabel,
+  RawProject,
+  RawTask,
+} from "./types.js";
 
 /** Vikunja's zero value for an unset timestamp. */
 const ZERO_DATE = "0001-01-01T00:00:00Z";
@@ -109,36 +117,6 @@ function findCheckbox(node: DomNode): DomNode | null {
 
 function isCheckbox(node: DomNode): boolean {
   return node.nodeName === "INPUT" && node.getAttribute("type") === "checkbox";
-}
-
-/*
- * Raw input shapes. Deliberately partial: only the fields we read are declared,
- * so a new field upstream cannot break the build. `client.ts` reuses these as
- * its return types.
- */
-
-export interface RawLabel {
-  id: number;
-  title: string;
-}
-
-export interface RawProject {
-  id: number;
-  title: string;
-  identifier: string;
-}
-
-export interface RawTask {
-  id: number;
-  /** Server-composed key, e.g. "INFRA-41", or "#41" when the project has no identifier. */
-  identifier: string;
-  title: string;
-  description: string;
-  done: boolean;
-  /** 0 means "unset"; the real scale is 1..5. */
-  priority: number;
-  due_date: string;
-  labels: RawLabel[] | null;
 }
 
 /** Drops Vikunja's zero timestamp so an unset date is absent rather than year 1. */

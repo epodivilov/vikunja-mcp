@@ -15,11 +15,13 @@ import {
   toLeanTask,
   toLeanTaskDetail,
 } from "../src/projection.ts";
-import type { RawTask } from "../src/projection.ts";
+import type { RawProject, RawTask } from "../src/types.ts";
 
 /** A task as the API returns it with every optional value unset. */
 const bareTask: RawTask = {
   id: 42,
+  project_id: 7,
+  index: 41,
   identifier: "INFRA-41",
   title: "Rotate the certs",
   description: "",
@@ -27,6 +29,15 @@ const bareTask: RawTask = {
   priority: 0,
   due_date: "0001-01-01T00:00:00Z",
   labels: null,
+};
+
+/** A project as the API returns it. `description` and `is_archived` never reach the model. */
+const bareProject: RawProject = {
+  id: 5,
+  title: "Infrastructure",
+  identifier: "INFRA",
+  description: "",
+  is_archived: false,
 };
 
 /** TipTap wraps the checkbox in a `<label>`, so it is not the `<li>`'s first child. */
@@ -120,12 +131,20 @@ describe("toLeanTaskDetail", () => {
 
 describe("toLeanProject / toLeanLabel", () => {
   it("maps the project identifier to key", () => {
-    const raw = { id: 5, title: "Infrastructure", identifier: "INFRA" };
-    assert.deepEqual(toLeanProject(raw), { key: "INFRA", id: 5, title: "Infrastructure" });
+    assert.deepEqual(toLeanProject({ ...bareProject, identifier: "INFRA" }), {
+      key: "INFRA",
+      id: 5,
+      title: "Infrastructure",
+    });
   });
 
   it("keeps an empty key for a project with no identifier", () => {
-    assert.equal(toLeanProject({ id: 5, title: "Scratch", identifier: "" }).key, "");
+    assert.equal(toLeanProject({ ...bareProject, identifier: "" }).key, "");
+  });
+
+  it("drops the fields a listing has no use for", () => {
+    const lean = toLeanProject({ ...bareProject, description: "<p>noise</p>", is_archived: true });
+    assert.deepEqual(Object.keys(lean).sort(), ["id", "key", "title"]);
   });
 
   it("maps a label", () => {
