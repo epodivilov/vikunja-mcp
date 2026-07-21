@@ -22,6 +22,15 @@ export interface LeanTask {
   labels: string[];
 }
 
+/**
+ * A single task read in full. Only `vikunja_get_task` returns this shape —
+ * list operations stay on `LeanTask` so a listing never carries descriptions.
+ */
+export interface LeanTaskDetail extends LeanTask {
+  /** Markdown, converted from the HTML Vikunja stores. Omitted when empty. */
+  description?: string;
+}
+
 export interface LeanLabel {
   id: number;
   title: string;
