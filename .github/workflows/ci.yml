@@ -17,13 +17,13 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Nothing here needs history today. It is here so VMCP-16 can add
           # `changeset status --since=origin/main` to this job without restructuring it.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # The floor declared in package.json `engines` — CI should fail on anything
           # the lowest supported runtime cannot handle.
