@@ -1,0 +1,45 @@
+{
+  "name": "@epodivilov/vikunja-mcp",
+  "version": "0.0.0",
+  "description": "Lean, identifier-native MCP server for Vikunja: compact task payloads and project keys like INFRA-41 instead of opaque global IDs.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Evgenii Podivilov",
+  "homepage": "https://github.com/epodivilov/vikunja-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/epodivilov/vikunja-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/epodivilov/vikunja-mcp/issues"
+  },
+  "keywords": ["vikunja", "mcp", "model-context-protocol", "tasks", "todo", "productivity"],
+  "bin": {
+    "vikunja-mcp": "dist/index.js"
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "check": "biome check . && tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run check && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "marked": "^14.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "allowScripts": {
+    "@biomejs/biome@1.9.4": true
+  }
+}
