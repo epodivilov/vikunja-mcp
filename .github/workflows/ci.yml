@@ -1,0 +1,43 @@
+name: CI
+
+# `pull_request` only. The event already builds the merge commit, so a `push` trigger
+# on `main` would re-check a tree identical to the one that just passed on the PR and
+# bill a second set of minutes for the answer we already have.
+on: pull_request
+
+# A force-push makes the in-flight run answer a question nobody is asking any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Deliberately one job. Splitting build/typecheck/lint across jobs would win a few
+  # seconds of wall clock and pay for it with another runner boot and another `npm ci`
+  # per job, which on a workflow this small is most of the bill.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Nothing here needs history today. It is here so VMCP-16 can add
+          # `changeset status --since=origin/main` to this job without restructuring it.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          # The floor declared in package.json `engines` — CI should fail on anything
+          # the lowest supported runtime cannot handle.
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      # Build first: it is the fastest way to fail and it invalidates the checks below,
+      # so there is no point paying for them on a tree that does not compile.
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+
+      # TODO(VMCP-13): the test step goes here. `npm test` feeds .ts files straight to
+      # `node --test`, which needs type stripping from Node 22.6+ — running it means
+      # settling how the test runtime relates to the `engines` floor pinned above.
