@@ -34,10 +34,10 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          # Above the `engines` floor of >=20 on purpose. `engines` constrains the runtime
-          # of the published package, which is plain compiled JS; this toolchain instead
-          # feeds .ts files straight to `node --test`, which needs the type stripping Node
-          # only added in 22.6 — on 20 the test step dies with ERR_UNKNOWN_FILE_EXTENSION.
+          # Deliberately newer than the `engines` floor. That floor describes what the
+          # published package needs to run, which is plain compiled JS; CI additionally has
+          # to run the dev toolchain, and the tests reach `node --test` as .ts. So CI needs
+          # a Node that strips types — an older one dies with ERR_UNKNOWN_FILE_EXTENSION.
           node-version: "24"
           cache: npm
 
