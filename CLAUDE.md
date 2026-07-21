@@ -95,9 +95,10 @@ collapse the whole key-resolution dance below into one request.)
 - A task also carries a ready-made `identifier` (`"VMCP-2"`), so the key does not have to be
   assembled from the project. On a read it is never empty: `setIdentifier` fills in `#<index>`
   itself when the project has no identifier, so `identifier || fallback` never takes the
-  fallback and `identifier === ""` never detects anything. It IS empty on an update response —
-  `setIdentifier` is not called on that path — so anything deriving a ref from `updateTask`
-  output has to assemble `<project.identifier>-<index>` from `index`.
+  fallback and `identifier === ""` never detects anything. On an update response the server does
+  not fill it in at all (`setIdentifier` is not called on that path), so it comes back only if
+  the request payload carried it — which the read-modify-write in `client.updateTask` happens to
+  do. Do not lean on that: derive the ref from `index` rather than from an update response.
 - There is no "get by key" endpoint. Resolve: project by identifier -> `GET /tasks` with
   `filter=project_id = <id>` (paginated) -> match `index` -> global id. Cache the project ->
   identifier map. Do NOT use `GET /projects/{id}/tasks`: it still answers, but v2.3.0 documents

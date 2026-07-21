@@ -60,8 +60,8 @@ export interface RawTask {
   index: number;
   /**
    * Vikunja renders the key itself, e.g. "VMCP-2" — and falls back to "#<index>" when the
-   * project has no identifier, so on a read this is never empty. It IS empty on an update
-   * response, which is the one place the server does not fill it in.
+   * project has no identifier, so on a read this is never empty. An update response is the one
+   * place the server does not fill it in: there it echoes whatever the payload carried.
    */
   identifier: string;
   labels: RawLabel[] | null;
