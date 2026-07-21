@@ -100,11 +100,36 @@ collapse the whole key-resolution dance below into one request.)
   not fill it in at all (`setIdentifier` is not called on that path), so it comes back only if
   the request payload carried it — which the read-modify-write in `client.updateTask` happens to
   do. Do not lean on that: derive the ref from `index` rather than from an update response.
-- There is no "get by key" endpoint. Resolve: project by identifier -> `GET /tasks` with
-  `filter=project_id = <id>` (paginated) -> match `index` -> global id. Cache the project ->
-  identifier map. Do NOT use `GET /projects/{id}/tasks`: it still answers, but v2.3.0 documents
-  only `PUT` on that path. Do NOT use `GET /projects/{id}/views/{view}/tasks` either — it applies
-  the view's own filter (the default List view hides done tasks) and silently returns a subset.
+- There is no "get by key" endpoint, but `index` is filterable: `GET /tasks` with
+  `filter=project_id = <id> && index = <n>` answers with exactly that one task, done or not, so
+  a key resolves in one request rather than by walking the project's task list. Verified on
+  2.3.0. Still match `index` on the result instead of taking row 0 — a build that ignored the
+  term would answer with the whole project, and row 0 of that is a different task. Cache the
+  identifier -> project map. Do NOT use `GET /projects/{id}/tasks`: it still answers, but v2.3.0
+  documents only `PUT` on that path. Do NOT use `GET /projects/{id}/views/{view}/tasks` either —
+  it applies the view's own filter (the default List view hides done tasks) and silently returns
+  a subset.
+- **Archived projects are hidden twice, and only one of them is opt-out.** `GET /projects` drops
+  them unless `is_archived=true` is passed — without it the query gets
+  `HAVING MAX(all_projects.is_archived) = 0` appended — and a child inherits the flag from an
+  archived parent. `client.listProjects` always asks for them, or the resolver would answer a
+  valid key with "no project has that key". `GET /tasks` is the harder one: it builds its project
+  set from `getRawProjectsForUser` with `getArchived` false and exposes **no parameter** to widen
+  it, so an archived project's tasks are absent from the collection no matter what the filter
+  says — while `GET /tasks/{id}` returns the very same task. Probed on 2.3.0 with a throwaway
+  archived project: `filter=project_id = 14 && index = 1` answered `[]`, `GET /tasks/579` answered
+  the task. So a key in an archived project is **not resolvable** on the filter path at all;
+  `resolveTask` says so instead of claiming the index does not exist. Writes the server refuses
+  on its own.
+- Updating a project writes a fixed column set, so an update that omits `identifier` **erases
+  it** — observed live: archiving through a client that PATCHes only `is_archived` left the
+  project with `identifier: ""`, silently destroying every task key in it. An archived project
+  also refuses further updates, so the repair is unarchive -> set identifier -> archive.
+- Project identifiers are unique, but the check is case-sensitive: creating a second `VMCP` is
+  refused with code 3007, while `vmcp` alongside it is accepted (probed on 2.3.0). Key input has
+  to be matched case-insensitively — the UI displays upper-case and an agent will type either —
+  and that match can therefore land on two projects. Report it as ambiguous rather than picking
+  one.
 - **Descriptions are stored verbatim.** The server neither converts markdown nor sanitizes
   HTML — a `<script>` tag round-trips untouched, and raw markdown comes back as raw markdown
   and renders literally in the UI. That is the whole bug: nothing upstream converts, so the
