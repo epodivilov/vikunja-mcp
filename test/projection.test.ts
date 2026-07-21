@@ -14,6 +14,7 @@ import {
   toLeanProject,
   toLeanTask,
   toLeanTaskDetail,
+  toTaskWrite,
 } from "../src/projection.ts";
 import type { RawProject, RawTask } from "../src/types.ts";
 
@@ -292,5 +293,39 @@ describe("round trip", () => {
     const once = htmlToMarkdown(markdownToHtml("Cost is 2 * 3 and file_name_here"));
     assert.equal(once, "Cost is 2 \\* 3 and file\\_name\\_here");
     assert.equal(htmlToMarkdown(markdownToHtml(once)), once);
+  });
+});
+
+describe("toTaskWrite", () => {
+  it("maps nothing when nothing was passed, so an update patches nothing", () => {
+    assert.deepEqual(toTaskWrite({}), {});
+  });
+
+  it("renames due to the column Vikunja writes", () => {
+    assert.deepEqual(toTaskWrite({ due: "2026-07-25T09:00:00Z" }), {
+      due_date: "2026-07-25T09:00:00Z",
+    });
+  });
+
+  it("converts a markdown description to HTML", () => {
+    assert.deepEqual(toTaskWrite({ description: "a **body**" }), {
+      description: "<p>a <strong>body</strong></p>",
+    });
+  });
+
+  it("clears a due date with Vikunja's own zero timestamp, since there is no null to send", () => {
+    assert.deepEqual(toTaskWrite({ due: "" }), { due_date: "0001-01-01T00:00:00Z" });
+  });
+
+  it("clears a description with the empty string the server stores", () => {
+    assert.deepEqual(toTaskWrite({ description: "" }), { description: "" });
+  });
+
+  it("keeps a false and a zero, which are values rather than absences", () => {
+    assert.deepEqual(toTaskWrite({ done: false, priority: 0 }), { done: false, priority: 0 });
+  });
+
+  it("omits a field left undefined next to one that was passed", () => {
+    assert.deepEqual(toTaskWrite({ title: "new", description: undefined }), { title: "new" });
   });
 });

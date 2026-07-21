@@ -101,3 +101,19 @@ export interface TaskWrite {
   priority?: number;
   due_date?: string;
 }
+
+/**
+ * The same fields in the vocabulary the tools speak: markdown rather than HTML, `due` rather
+ * than the `due_date` column, and `""` for "clear this" rather than Vikunja's zero values.
+ * `toTaskWrite` in `projection` is the one place that bridges the two.
+ */
+export interface TaskFields {
+  title?: string;
+  /** Markdown. `""` clears the description. */
+  description?: string;
+  done?: boolean;
+  /** 0 is "no priority", which is also how Vikunja stores an unset one. */
+  priority?: number;
+  /** RFC3339 timestamp, or `""` to clear the due date. */
+  due?: string;
+}
