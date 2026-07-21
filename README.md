@@ -23,6 +23,10 @@ Configuration is environment-only:
 | `VIKUNJA_API_TOKEN` | yes | — |
 | `VIKUNJA_URL` | no | `http://localhost:3456/api/v1` |
 
+`VIKUNJA_URL` is optional only while it stays unset. Set to an empty value, to something that is
+not a URL, to a scheme other than `http`/`https`, or to a URL carrying a query string or fragment,
+the server refuses to start and names what was wrong — rather than failing at the first request.
+
 Register it (Claude Code example):
 
 ```json

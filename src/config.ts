@@ -67,6 +67,21 @@ function parseBaseUrl(rawUrl: string): string {
     );
   }
 
+  // A query or fragment on the base makes every request malformed, because the client builds
+  // URLs by appending a path: `…/api/v1?foo=bar` + `/projects` asks the server for `/api/v1`
+  // with a nonsense query, and a fragment swallows the path outright, collapsing every endpoint
+  // onto the same URL. Both answer 404 naming the endpoint, never the variable at fault.
+  //
+  // The raw value is what gets searched, not `url.search`/`url.hash`: a bare trailing `?` or `#`
+  // reads empty through both getters while `href` keeps it, so the parsed object cannot see it.
+  const marker = value.search(/[?#]/);
+  if (marker !== -1) {
+    throw new Error(
+      `VIKUNJA_URL must be the API root alone, with no query string or fragment: "${value}". ` +
+        `Every request appends a path to it, so anything from "${value.slice(marker)}" on would swallow that path.`,
+    );
+  }
+
   // `href`, not the raw string, so that what was validated is what every request is built from,
   // with the host normalised the way `fetch` would have normalised it anyway.
   return url.href.replace(/\/+$/, "");
