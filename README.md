@@ -86,9 +86,14 @@ third-party calls. It is intentionally small so you can read every line that tou
 
 ```
 npm install
-npm run check   # biome + tsc
+npm run check   # biome + tsc + tests
 npm run build
 ```
+
+The published package runs on Node >= 22 (`engines.node`) — that is plain compiled JS in `dist`.
+Working on the source needs Node >= 22.18 (`devEngines.runtime`), because `npm test` runs the
+TypeScript suite through Node's built-in type stripping, which is only enabled by default from
+22.18 onward. On anything older the suite fails with `ERR_UNKNOWN_FILE_EXTENSION`.
 
 See [CLAUDE.md](./CLAUDE.md) for architecture and conventions.
 
