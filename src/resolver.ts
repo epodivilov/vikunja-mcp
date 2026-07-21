@@ -8,16 +8,23 @@
  * injected client, which keeps the one-host rule enforced in a single place.
  */
 import type { TaskQuery } from "./client.js";
-import type { RawProject, RawTask } from "./types.js";
+import type { RawLabel, RawProject, RawTask } from "./types.js";
 
 /**
  * The slice of the client this module needs. Declared structurally rather than importing
- * `VikunjaClient` so a test can hand over two functions instead of standing up an HTTP server.
+ * `VikunjaClient` so a test can hand over three functions instead of standing up an HTTP server.
  */
 export interface ResolverClient {
   listProjects(): Promise<RawProject[]>;
   listTasks(query: TaskQuery): Promise<RawTask[]>;
+  listLabels(): Promise<RawLabel[]>;
 }
+
+/**
+ * A label as an agent names it: the title it reads in a listing, or — when that title turns out
+ * to be shared — the id printed beside it.
+ */
+export type LabelRef = string | number;
 
 /** A task key split into the parts Vikunja stores separately. */
 export interface TaskRef {
@@ -288,6 +295,37 @@ export class Resolver {
   }
 
   /**
+   * Label titles -> the ids the task/label endpoint takes.
+   *
+   * Titles are not unique: Vikunja enforces nothing there, and the instance this was built
+   * against carries three labels called "feature" and three called "bug", so the collision is
+   * the normal case rather than a corner one. An ambiguous title is therefore reported
+   * instead of resolved to the lower id — picking one silently is the class of bug this module
+   * exists to prevent — and the error names the ids to choose between. A number is taken as a
+   * label id and still checked against the listing, so every label in a call is validated
+   * before the caller writes anything and a typo cannot leave a half-labelled task behind.
+   *
+   * Deliberately uncached: labels are read once per write that carries them, which is rare, and
+   * a cache would answer "no such label" for one created a moment ago in the UI.
+   */
+  async resolveLabelIds(labels: readonly LabelRef[]): Promise<number[]> {
+    if (labels.length === 0) {
+      return [];
+    }
+
+    const known = await this.#client.listLabels();
+    // A Set keyed by id: the same label named twice, or named once by title and once by id,
+    // would otherwise be attached twice — and the second attach is an error (code 8001).
+    const ids = new Set<number>();
+
+    for (const label of labels) {
+      ids.add(typeof label === "number" ? labelById(known, label) : labelByTitle(known, label));
+    }
+
+    return [...ids];
+  }
+
+  /**
    * A prefix the map does not know is worth one `GET /projects` before it is called missing — a
    * project created after this process started is the common case, and a permanent "no such key"
    * for it would make the cache a liability. The reload is rate-limited rather than counted:
@@ -406,4 +444,37 @@ function archivedProjectError(subject: string): Error {
   return new Error(
     `Cannot list the tasks of ${subject}: the project is archived, and Vikunja does not list tasks of archived projects. Read a task of it as { id: <global id> }, or unarchive the project.`,
   );
+}
+
+function labelById(known: readonly RawLabel[], id: number): number {
+  const label = known.find((candidate) => candidate.id === id);
+
+  if (label === undefined) {
+    throw new Error(`No label has id ${id}. List labels to see which ids exist.`);
+  }
+
+  return label.id;
+}
+
+function labelByTitle(known: readonly RawLabel[], title: string): number {
+  const wanted = title.trim().toLowerCase();
+
+  if (wanted === "") {
+    throw new Error('A label is named by its title, e.g. "bug", or by its id.');
+  }
+
+  const [match, ...rest] = known.filter((label) => label.title.trim().toLowerCase() === wanted);
+
+  if (match === undefined) {
+    throw new Error(`No label is titled "${title}". List labels to see the titles in use.`);
+  }
+
+  if (rest.length > 0) {
+    const ids = [match, ...rest].map((label) => label.id).join(", ");
+    throw new Error(
+      `The title "${title}" belongs to ${rest.length + 1} labels (ids ${ids}), so it does not name one. Pass the id of the label you mean instead of its title.`,
+    );
+  }
+
+  return match.id;
 }

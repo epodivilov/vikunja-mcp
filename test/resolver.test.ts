@@ -13,7 +13,7 @@ import {
   parseProjectKey,
   parseTaskRef,
 } from "../src/resolver.ts";
-import type { RawProject, RawTask } from "../src/types.ts";
+import type { RawLabel, RawProject, RawTask } from "../src/types.ts";
 
 function project(id: number, identifier: string, isArchived = false): RawProject {
   return { id, title: `Project ${id}`, identifier, description: "", is_archived: isArchived };
@@ -41,18 +41,24 @@ interface StubOptions {
   failures?: number;
   /** 1-based `listProjects` call numbers that fail, for a reload landing on a warm cache. */
   failOn?: number[];
+  /** The instance's labels. Titles are not unique on a real server, and neither are these. */
+  labels?: RawLabel[];
 }
 
 interface Stub extends ResolverClient {
-  calls: { listProjects: number; filters: string[] };
+  calls: { listProjects: number; listLabels: number; filters: string[] };
 }
 
 function stubClient(projects: RawProject[], tasks: RawTask[], options: StubOptions = {}): Stub {
-  const calls = { listProjects: 0, filters: [] as string[] };
+  const calls = { listProjects: 0, listLabels: 0, filters: [] as string[] };
   let failures = options.failures ?? 0;
 
   return {
     calls,
+    listLabels: async () => {
+      calls.listLabels++;
+      return options.labels ?? [];
+    },
     listProjects: async () => {
       calls.listProjects++;
       if (failures > 0) {
@@ -397,5 +403,51 @@ describe("Resolver", () => {
 
     await assert.rejects(() => resolver.resolveTask("INFRA-41"), /boom/);
     assert.equal((await resolver.resolveTask("INFRA-41")).id, 301);
+  });
+});
+
+describe("Resolver.resolveLabelIds", () => {
+  const LABELS: RawLabel[] = [
+    { id: 1, title: "feature" },
+    { id: 2, title: "bug" },
+    { id: 5, title: "feature" },
+  ];
+
+  function labelResolver(labels = LABELS): Resolver {
+    return new Resolver(stubClient(PROJECTS, TASKS, { labels }));
+  }
+
+  it("maps a title to its id, case-insensitively", async () => {
+    assert.deepEqual(await labelResolver().resolveLabelIds(["BUG"]), [2]);
+  });
+
+  it("takes a number as a label id", async () => {
+    assert.deepEqual(await labelResolver().resolveLabelIds([5]), [5]);
+  });
+
+  it("refuses a title two labels share rather than picking the lower id", async () => {
+    await assert.rejects(
+      () => labelResolver().resolveLabelIds(["feature"]),
+      /belongs to 2 labels \(ids 1, 5\)/,
+    );
+  });
+
+  it("reports a title no label carries", async () => {
+    await assert.rejects(() => labelResolver().resolveLabelIds(["nope"]), /No label is titled/);
+  });
+
+  it("checks a label id against the listing, so nothing is written for a typo", async () => {
+    await assert.rejects(() => labelResolver().resolveLabelIds([99]), /No label has id 99/);
+  });
+
+  it("collapses a label named twice, which the API would refuse the second time", async () => {
+    assert.deepEqual(await labelResolver().resolveLabelIds(["bug", 2, " Bug "]), [2]);
+  });
+
+  it("does not list labels when a call carries none", async () => {
+    const client = stubClient(PROJECTS, TASKS, { labels: LABELS });
+
+    assert.deepEqual(await new Resolver(client).resolveLabelIds([]), []);
+    assert.equal(client.calls.listLabels, 0);
   });
 });

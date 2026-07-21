@@ -4,10 +4,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { VikunjaClient } from "./client.js";
 import { loadConfig } from "./config.js";
 import { Resolver } from "./resolver.js";
+import { registerCommentTaskTool } from "./tools/comment-task.js";
+import { registerCompleteTaskTool } from "./tools/complete-task.js";
+import { registerCreateTaskTool } from "./tools/create-task.js";
+import { registerDeleteTaskTool } from "./tools/delete-task.js";
 import { registerGetTaskTool } from "./tools/get-task.js";
 import { registerListLabelsTool } from "./tools/list-labels.js";
 import { registerListProjectsTool } from "./tools/list-projects.js";
 import { registerListTasksTool } from "./tools/list-tasks.js";
+import { registerUpdateTaskTool } from "./tools/update-task.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -28,9 +33,15 @@ async function main(): Promise<void> {
   registerListTasksTool(server, client, resolver);
   registerGetTaskTool(server, client, resolver);
   registerListLabelsTool(server, client);
-
-  // TODO: register write tools (create/update/complete/comment/delete_task) as their own group.
   //       See CLAUDE.md -> "Tool surface". Each tool lives in src/tools/*.
+
+  // Write tools. One per operation, and never behind a shared `subcommand` argument: an MCP
+  // client has to be able to allow creating a task without also allowing deleting one.
+  registerCreateTaskTool(server, client, resolver);
+  registerUpdateTaskTool(server, client, resolver);
+  registerCompleteTaskTool(server, client, resolver);
+  registerCommentTaskTool(server, client, resolver);
+  registerDeleteTaskTool(server, client, resolver);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

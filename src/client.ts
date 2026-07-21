@@ -182,6 +182,22 @@ export class VikunjaClient {
     return this.#requestAll<RawLabel>("/labels");
   }
 
+  /**
+   * Attaches an existing label to a task. One request per label; the endpoint takes one id.
+   *
+   * Labels do not travel in the task payload, despite the API accepting one there. Probed on
+   * 2.3.0: `PUT /projects/1/tasks` with `labels: [{ id: 2 }]` answered 201 echoing that label,
+   * and the read that followed reported `labels: null` — the create handler never writes the
+   * link table. The update path does not touch it either, which is what makes labels survive
+   * the read-modify-write above. So the association has its own endpoint, and this is it.
+   *
+   * A label already on the task is refused with code 8001, an unknown one with 8002; both
+   * surface as `VikunjaHttpError` rather than being swallowed.
+   */
+  async addTaskLabel(taskId: number, labelId: number): Promise<void> {
+    await this.#request<unknown>("PUT", `/tasks/${taskId}/labels`, { body: { label_id: labelId } });
+  }
+
   // --- comments ---------------------------------------------------------------
 
   listComments(taskId: number): Promise<RawComment[]> {
