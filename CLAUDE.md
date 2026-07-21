@@ -109,12 +109,22 @@ collapse the whole key-resolution dance below into one request.)
   documents only `PUT` on that path. Do NOT use `GET /projects/{id}/views/{view}/tasks` either —
   it applies the view's own filter (the default List view hides done tasks) and silently returns
   a subset.
-- `GET /projects` hides archived projects unless `is_archived=true` is passed: without it the
-  query gets `HAVING MAX(all_projects.is_archived) = 0` appended (`project.go` at v2.3.0), and a
-  child inherits the flag from an archived parent. The resolver builds its key map from that
-  call, so leaving the parameter off answers a valid key with "no project has that key" — a
-  false statement the agent cannot work around. `client.listProjects` therefore always asks for
-  archived projects; the server refuses writes to them on its own.
+- **Archived projects are hidden twice, and only one of them is opt-out.** `GET /projects` drops
+  them unless `is_archived=true` is passed — without it the query gets
+  `HAVING MAX(all_projects.is_archived) = 0` appended — and a child inherits the flag from an
+  archived parent. `client.listProjects` always asks for them, or the resolver would answer a
+  valid key with "no project has that key". `GET /tasks` is the harder one: it builds its project
+  set from `getRawProjectsForUser` with `getArchived` false and exposes **no parameter** to widen
+  it, so an archived project's tasks are absent from the collection no matter what the filter
+  says — while `GET /tasks/{id}` returns the very same task. Probed on 2.3.0 with a throwaway
+  archived project: `filter=project_id = 14 && index = 1` answered `[]`, `GET /tasks/579` answered
+  the task. So a key in an archived project is **not resolvable** on the filter path at all;
+  `resolveTask` says so instead of claiming the index does not exist. Writes the server refuses
+  on its own.
+- Updating a project writes a fixed column set, so an update that omits `identifier` **erases
+  it** — observed live: archiving through a client that PATCHes only `is_archived` left the
+  project with `identifier: ""`, silently destroying every task key in it. An archived project
+  also refuses further updates, so the repair is unarchive -> set identifier -> archive.
 - Project identifiers are unique, but the check is case-sensitive: creating a second `VMCP` is
   refused with code 3007, while `vmcp` alongside it is accepted (probed on 2.3.0). Key input has
   to be matched case-insensitively — the UI displays upper-case and an agent will type either —

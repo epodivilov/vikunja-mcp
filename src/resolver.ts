@@ -27,12 +27,18 @@ export interface TaskRef {
   index: number;
 }
 
+/** A project as the key map remembers it. `archived` decides which failure a missing task is. */
+interface ProjectEntry {
+  id: number;
+  archived: boolean;
+}
+
 /**
- * Project identifier -> the ids that claim it. A list, not an id: Vikunja enforces identifier
- * uniqueness case-sensitively, so `VMCP` and `vmcp` can both exist, and the lookup here is
- * case-insensitive because that is how keys arrive.
+ * Project identifier -> the projects that claim it. A list, not one project: Vikunja enforces
+ * identifier uniqueness case-sensitively, so `VMCP` and `vmcp` can both exist, and the lookup
+ * here is case-insensitive because that is how keys arrive.
  */
-type ProjectMap = Map<string, number[]>;
+type ProjectMap = Map<string, ProjectEntry[]>;
 
 /** Which escape hatch an ambiguous prefix should point at — a task and a project differ. */
 type Subject = "task" | "project";
@@ -146,7 +152,7 @@ export class Resolver {
       throw new Error(`"${key}" is not a project key. Expected an identifier such as INFRA.`);
     }
 
-    return this.#projectId(prefix, "project");
+    return (await this.#project(prefix, "project")).id;
   }
 
   /**
@@ -162,7 +168,8 @@ export class Resolver {
    */
   async resolveTask(ref: string): Promise<RawTask> {
     const { prefix, index } = parseTaskRef(ref);
-    const projectId = await this.#projectId(prefix, "task");
+    const project = await this.#project(prefix, "task");
+    const projectId = project.id;
     const tasks = await this.#client.listTasks({
       filter: `project_id = ${projectId} && index = ${index}`,
     });
@@ -173,8 +180,14 @@ export class Resolver {
     const match = tasks.find((task) => task.index === index && task.project_id === projectId);
 
     if (match === undefined) {
+      // An archived project answers `GET /tasks` with nothing at all — the collection is built
+      // from the user's non-archived projects and takes no parameter to widen that (probed on
+      // 2.3.0, where `GET /tasks/{id}` still returns the very task the filter omits). Saying the
+      // index does not exist would be a lie; the key is simply not resolvable on this path.
       throw new Error(
-        `No task ${prefix}-${index}: project ${prefix} (id ${projectId}) has no task with index ${index}.`,
+        project.archived
+          ? `Cannot resolve ${prefix}-${index}: project ${prefix} (id ${projectId}) is archived, and Vikunja does not list tasks of archived projects. Read the task as { id: <global id> }, or unarchive the project.`
+          : `No task ${prefix}-${index}: project ${prefix} (id ${projectId}) has no task with index ${index}.`,
       );
     }
 
@@ -188,17 +201,17 @@ export class Resolver {
    * within `RELOAD_INTERVAL_MS` of the last successful load the map answers on its own, so a
    * mistyped key costs nothing and a cold start does not list projects twice in a row.
    */
-  async #projectId(prefix: string, subject: Subject): Promise<number> {
+  async #project(prefix: string, subject: Subject): Promise<ProjectEntry> {
     const map = await this.#projectMap();
-    const ids = map.get(prefix) ?? (await this.#refresh(map)).get(prefix);
-    const [id, ...rest] = ids ?? [];
+    const entries = map.get(prefix) ?? (await this.#refresh(map)).get(prefix);
+    const [project, ...rest] = entries ?? [];
 
-    if (id === undefined) {
+    if (project === undefined) {
       throw new Error(`No project has the key "${prefix}". List projects to see the keys in use.`);
     }
 
     if (rest.length > 0) {
-      const all = [id, ...rest].join(", ");
+      const all = [project, ...rest].map((entry) => entry.id).join(", ");
       throw new Error(
         subject === "task"
           ? `The key "${prefix}" belongs to ${rest.length + 1} projects (ids ${all}), so a task key using it is ambiguous. Address the task as { id: <global id> }.`
@@ -206,7 +219,7 @@ export class Resolver {
       );
     }
 
-    return id;
+    return project;
   }
 
   /** The cold path: one load, shared by everyone who arrives while it is in flight. */
@@ -271,12 +284,13 @@ export class Resolver {
       }
 
       const key = project.identifier.toUpperCase();
-      const ids = map.get(key);
+      const entry: ProjectEntry = { id: project.id, archived: project.is_archived };
+      const entries = map.get(key);
 
-      if (ids === undefined) {
-        map.set(key, [project.id]);
+      if (entries === undefined) {
+        map.set(key, [entry]);
       } else {
-        ids.push(project.id);
+        entries.push(entry);
       }
     }
 

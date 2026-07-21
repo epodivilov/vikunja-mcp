@@ -9,8 +9,8 @@ import { describe, it } from "node:test";
 import { Resolver, type ResolverClient, formatRef, parseTaskRef } from "../src/resolver.ts";
 import type { RawProject, RawTask } from "../src/types.ts";
 
-function project(id: number, identifier: string): RawProject {
-  return { id, title: `Project ${id}`, identifier, description: "", is_archived: false };
+function project(id: number, identifier: string, isArchived = false): RawProject {
+  return { id, title: `Project ${id}`, identifier, description: "", is_archived: isArchived };
 }
 
 function task(id: number, projectId: number, index: number): RawTask {
@@ -257,6 +257,24 @@ describe("Resolver", () => {
     const client = stubClient(PROJECTS, TASKS);
 
     await assert.rejects(() => new Resolver(client).resolveTask("INFRA-99"), /no task with index/);
+  });
+
+  it("blames the archive, not the index, for a task an archived project will not list", async () => {
+    // Verified on 2.3.0: `GET /tasks` is built from the user's non-archived projects and takes
+    // no parameter to widen that, so an archived project answers with nothing whatever the
+    // filter says — while `GET /tasks/{id}` still returns the same task.
+    const client = stubClient([project(20, "OLD", true)], []);
+
+    await assert.rejects(
+      () => new Resolver(client).resolveTask("OLD-1"),
+      /is archived, and Vikunja does not list tasks of archived projects/,
+    );
+  });
+
+  it("still resolves the key of a project that is not archived", async () => {
+    const client = stubClient([project(7, "INFRA"), project(20, "OLD", true)], TASKS);
+
+    assert.equal((await new Resolver(client).resolveTask("INFRA-41")).id, 301);
   });
 
   it("errors instead of returning another task when the server ignores the index term", async () => {
