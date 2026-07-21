@@ -23,12 +23,12 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.check.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "test": "node --test test/*.test.ts",
-    "check": "biome check . && tsc -p tsconfig.json --noEmit && npm test",
+    "check": "biome check . && npm run typecheck && npm test",
     "prepublishOnly": "npm run check && npm run build"
   },
   "dependencies": {

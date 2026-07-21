@@ -10,12 +10,21 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Nothing here writes to the repo. Stated explicitly so the job stays read-only even if the
+# repo or org default is ever loosened.
+permissions:
+  contents: read
+
 jobs:
   # Deliberately one job. Splitting build/typecheck/test/lint across jobs would win a few
   # seconds of wall clock and pay for it with another runner boot and another `npm ci`
   # per job, which on a workflow this small is most of the bill.
   check:
     runs-on: ubuntu-latest
+    # The job settles in well under a minute; the default ceiling is six hours. This caps
+    # what a hung install or a wedged test can bill, which is the same tail risk the rest
+    # of this file is written to avoid.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
