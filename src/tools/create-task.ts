@@ -4,9 +4,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
-import { markdownToHtml, toLeanTask } from "../projection.js";
+import { toLeanTask, toTaskWrite } from "../projection.js";
 import type { Resolver } from "../resolver.js";
-import type { TaskWrite } from "../types.js";
 import { dueField, priorityField } from "./task-fields.js";
 
 export function registerCreateTaskTool(
@@ -20,7 +19,11 @@ export function registerCreateTaskTool(
       title: "Create task",
       description:
         "Create a task in a project. Answers with the new task's key, which is how every other tool addresses it.",
-      inputSchema: {
+      // Strict: an argument this schema does not declare is an error rather than a silent
+      // drop. `labels` on an update, `assignees` here, a misspelled field — a non-strict schema
+      // answers all of them with a cheerful success and no change, which is the worst answer
+      // available. The strictness also reaches the client as `additionalProperties: false`.
+      inputSchema: z.strictObject({
         project: z
           .string()
           .optional()
@@ -52,7 +55,7 @@ export function registerCreateTaskTool(
           .describe(
             "Existing labels, each named by title or by the id vikunja_list_labels reports. Labels are never created here; an unknown one is an error. Pass an id when a title turns out to be shared.",
           ),
-      },
+      }),
       annotations: { destructiveHint: false },
     },
     async ({ project, projectId, title, description, priority, due, labels }) => {
@@ -61,19 +64,10 @@ export function registerCreateTaskTool(
       // written, rather than leaving a task behind that is missing half its labels.
       const labelIds = labels === undefined ? [] : await resolver.resolveLabelIds(labels);
 
-      const write: TaskWrite = { title };
-
-      if (description !== undefined) {
-        write.description = markdownToHtml(description);
-      }
-      if (priority !== undefined) {
-        write.priority = priority;
-      }
-      if (due !== undefined) {
-        write.due_date = due;
-      }
-
-      const created = await client.createTask(targetProject, write);
+      const created = await client.createTask(
+        targetProject,
+        toTaskWrite({ title, description, priority, due }),
+      );
 
       for (const labelId of labelIds) {
         try {

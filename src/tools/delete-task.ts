@@ -5,6 +5,7 @@
  * and folding it into a general "task" tool would mean allowing it to allow anything else.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
 import { toLeanTask } from "../projection.js";
 import type { Resolver } from "../resolver.js";
@@ -21,7 +22,9 @@ export function registerDeleteTaskTool(
       title: "Delete task",
       description:
         "Permanently delete a task, along with its comments. This cannot be undone — to close a task instead, use vikunja_complete_task.",
-      inputSchema: { ...taskTargetShape },
+      // Strict: on the one irreversible tool, an argument that is not understood is worth an
+      // error rather than a guess at what the caller meant.
+      inputSchema: z.strictObject({ ...taskTargetShape }),
       annotations: { destructiveHint: true, idempotentHint: false },
     },
     async ({ task, id }) => {

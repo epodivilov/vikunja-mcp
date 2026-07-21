@@ -21,10 +21,11 @@ export function registerCommentTaskTool(
     {
       title: "Comment on task",
       description: "Add a comment to a task. The comment body is markdown.",
-      inputSchema: {
+      // Strict: an argument this schema does not name is refused, not quietly dropped.
+      inputSchema: z.strictObject({
         ...taskTargetShape,
         comment: z.string().trim().min(1).describe("Comment body in markdown."),
-      },
+      }),
       annotations: { destructiveHint: false },
     },
     async ({ task, id, comment }) => {

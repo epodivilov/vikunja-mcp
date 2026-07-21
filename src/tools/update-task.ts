@@ -9,10 +9,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
-import { markdownToHtml, toLeanTask } from "../projection.js";
+import { toLeanTask, toTaskWrite } from "../projection.js";
 import type { Resolver } from "../resolver.js";
-import type { TaskWrite } from "../types.js";
-import { dueField, priorityField } from "./task-fields.js";
+import { clearableDueField, priorityField } from "./task-fields.js";
 import { resolveTaskTarget, taskTargetShape } from "./task-target.js";
 
 export function registerUpdateTaskTool(
@@ -25,8 +24,11 @@ export function registerUpdateTaskTool(
     {
       title: "Update task",
       description:
-        "Change fields of an existing task. Fields left out keep their current value; fields passed replace it.",
-      inputSchema: {
+        "Change fields of an existing task. Fields left out keep their current value; fields passed replace it. Labels and assignees cannot be changed here — passing them is an error rather than a silent no-op.",
+      // Strict, so a field this tool does not implement is refused instead of dropped. A
+      // non-strict schema would answer `{ labels: [...] }` with a success and an unchanged
+      // task, and the description above would be the reason an agent believed it.
+      inputSchema: z.strictObject({
         ...taskTargetShape,
         title: z.string().trim().min(1).optional().describe("New title."),
         description: z
@@ -42,29 +44,15 @@ export function registerUpdateTaskTool(
         priority: priorityField
           .optional()
           .describe("0 none, 1 low, 2 medium, 3 high, 4 urgent, 5 DO NOW."),
-        due: dueField
+        due: clearableDueField
           .optional()
-          .describe('Due date as an RFC3339 timestamp, "2026-07-25T09:00:00Z".'),
-      },
+          .describe(
+            'Due date as an RFC3339 timestamp, "2026-07-25T09:00:00Z". An empty string clears it.',
+          ),
+      }),
     },
     async ({ task, id, title, description, done, priority, due }) => {
-      const write: TaskWrite = {};
-
-      if (title !== undefined) {
-        write.title = title;
-      }
-      if (description !== undefined) {
-        write.description = markdownToHtml(description);
-      }
-      if (done !== undefined) {
-        write.done = done;
-      }
-      if (priority !== undefined) {
-        write.priority = priority;
-      }
-      if (due !== undefined) {
-        write.due_date = due;
-      }
+      const write = toTaskWrite({ title, description, done, priority, due });
 
       // Refused before the task is even resolved: an update carrying no fields would still cost
       // a write, and an agent that meant to change something deserves to hear that it did not.

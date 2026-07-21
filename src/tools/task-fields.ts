@@ -14,11 +14,27 @@ import { z } from "zod";
  */
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-export const dueField = z
+const DUE_FORMAT =
+  'A due date has to be an RFC3339 timestamp, e.g. "2026-07-25T09:00:00Z". Vikunja rejects a bare date.';
+
+export const dueField = z.string().regex(RFC3339, DUE_FORMAT);
+
+/**
+ * The same timestamp, plus `""` for "clear the due date".
+ *
+ * A clear has to be spelled out because there is nothing else to send: an omitted field means
+ * "leave it alone" (the update is a patch), and Vikunja has no null for a date — an unset one
+ * is the zero timestamp, which `toTaskWrite` writes. `priority: 0` already resets a priority,
+ * so a date with no way back off the task would be the odd one out.
+ *
+ * One regex rather than a union of two, so a wrong value is answered with one message naming
+ * both spellings instead of a list of branch failures.
+ */
+export const clearableDueField = z
   .string()
   .regex(
-    RFC3339,
-    'A due date has to be an RFC3339 timestamp, e.g. "2026-07-25T09:00:00Z". Vikunja rejects a bare date.',
+    new RegExp(`^$|${RFC3339.source}`),
+    `${DUE_FORMAT} Pass an empty string to clear the date.`,
   );
 
 /** Vikunja's own scale. 0 is "no priority", which is also how a task starts out. */

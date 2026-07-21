@@ -14,6 +14,8 @@ import type {
   RawLabel,
   RawProject,
   RawTask,
+  TaskFields,
+  TaskWrite,
 } from "./types.js";
 
 /** Vikunja's zero value for an unset timestamp. */
@@ -160,6 +162,41 @@ export function toLeanTask(raw: RawTask): LeanTask {
   }
 
   return task;
+}
+
+/**
+ * Lean fields -> the columns the API writes. The mirror of `toLeanTask`, closing the same
+ * vocabulary gap in the other direction: `due` is stored as `due_date`, markdown is stored as
+ * HTML, and "no value" is a zero value rather than a null Vikunja would reject.
+ *
+ * Only the fields actually present are mapped. That matters upstream: `POST /tasks/{id}`
+ * re-zeroes every column its payload omits, so a patch has to say exactly what it means to
+ * change and nothing more — `client.updateTask` layers it onto the task as the server has it.
+ *
+ * Clearing therefore has to be spelled, since an omitted field means "leave alone": `""` clears
+ * a description, and `""` for a due date becomes Vikunja's own zero timestamp, which is what
+ * an unset date reads back as.
+ */
+export function toTaskWrite(fields: TaskFields): TaskWrite {
+  const write: TaskWrite = {};
+
+  if (fields.title !== undefined) {
+    write.title = fields.title;
+  }
+  if (fields.description !== undefined) {
+    write.description = markdownToHtml(fields.description);
+  }
+  if (fields.done !== undefined) {
+    write.done = fields.done;
+  }
+  if (fields.priority !== undefined) {
+    write.priority = fields.priority;
+  }
+  if (fields.due !== undefined) {
+    write.due_date = fields.due === "" ? ZERO_DATE : fields.due;
+  }
+
+  return write;
 }
 
 export function toLeanTaskDetail(raw: RawTask): LeanTaskDetail {
