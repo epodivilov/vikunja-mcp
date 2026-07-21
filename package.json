@@ -27,13 +27,15 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "check": "biome check . && tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.ts",
+    "check": "biome check . && tsc -p tsconfig.json --noEmit && npm test",
     "prepublishOnly": "npm run check && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "marked": "^14.0.0",
-    "turndown": "^7.2.0"
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

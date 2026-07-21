@@ -10,7 +10,7 @@ document traces back to one of them:
 
 1. **Raw payloads.** They return full Vikunja API objects (views, buckets, blur hashes,
    expanded owners). One real project listing measured ~95k characters. → We project to lean
-   DTOs and never leak a raw API object to the model.
+   DTOs and never leak a raw API object to the model. Measured against a live instance: 39x smaller on a project listing, 10x on a task listing.
 2. **No pagination.** They issue a single request and drop the `x-pagination-*` headers,
    silently truncating lists at 50. → The client follows `x-pagination-total-pages` and returns
    everything.
@@ -104,6 +104,24 @@ collapse the whole key-resolution dance below into one request.)
   identifier map. Do NOT use `GET /projects/{id}/tasks`: it still answers, but v2.3.0 documents
   only `PUT` on that path. Do NOT use `GET /projects/{id}/views/{view}/tasks` either — it applies
   the view's own filter (the default List view hides done tasks) and silently returns a subset.
+- **Descriptions are stored verbatim.** The server neither converts markdown nor sanitizes
+  HTML — a `<script>` tag round-trips untouched, and raw markdown comes back as raw markdown
+  and renders literally in the UI. That is the whole bug: nothing upstream converts, so the
+  conversion is ours to do on write. Expect legacy raw-markdown descriptions in existing data.
+- **We sanitize on write, because nobody else will.** `markdownToHtml` escapes raw HTML to
+  text instead of passing it through, and drops any link scheme outside
+  `https? | mailto | # | /`. The markdown reaching it is written by a model that has just read
+  text from tasks it does not own, so treat that input as untrusted.
+- The editor is TipTap, and its HTML is not the shape you would write by hand: table cells
+  wrap content in `<p>`, and a task-list checkbox sits inside a `<label>`, not directly in the
+  `<li>`. `turndown-plugin-gfm` alone handles neither — `projection.ts` adds a rule for each.
+  Checkbox state is task data; losing it is a bug, not a formatting nit.
+- Detecting "is this HTML or legacy markdown" uses an **allowlist** of tags the editor emits.
+  A loose `<[a-z]...>` pattern also matches markdown autolinks (`<https://example.com>`,
+  `<ev@example.com>`), and turndown deletes the URL when handed one.
+- Absent values are zero values, not `null`/omitted: description `""`, `labels: null`,
+  `priority: 0`, dates `0001-01-01T00:00:00Z`. A rich-text field cleared in the UI comes back
+  as `<p></p>`. Projection normalizes all of these away.
 - Pagination headers: `x-pagination-total-pages`, `x-pagination-result-count`.
   `max_items_per_page` (`service.maxitemsperpage`) defaults to **50**, not 1000; a larger
   `per_page` is clamped without an error and the page count is derived from the clamped value,
@@ -125,6 +143,14 @@ collapse the whole key-resolution dance below into one request.)
 ## Checks
 
 ```
-npm run check   # biome check + tsc --noEmit
+npm run check   # biome check + tsc --noEmit + npm test
 npm run build
 ```
+
+Tests live in `test/`, not `src/` — `src` is the build root and `files: ["dist"]` would publish
+them. They run through `node --test` on the TypeScript directly, so **development needs Node
+22.6+** even though the shipped code still supports the `engines` floor of 20. `tsc` does not
+typecheck `test/` (`include: ["src"]`); Biome still lints it.
+
+`projection.ts` is pure, so its edge cases are cheap to pin. Anything learned about the live
+server's actual shapes belongs in `test/projection.test.ts` as a case, not in a commit message.
