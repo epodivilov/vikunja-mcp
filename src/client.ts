@@ -19,6 +19,14 @@ const PAGE_SIZE = 1000;
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * A ceiling on the paging loop. `x-pagination-total-pages` is server-supplied and nothing
+ * validates it, so a buggy or hostile value would turn one tool call into an unbounded run of
+ * sequential requests with an array growing until the process dies. At the page sizes we ask
+ * for this is far past any real collection.
+ */
+const MAX_PAGES = 500;
+
 const REDIRECT_REFUSAL =
   "Not followed: this server talks to VIKUNJA_URL and to nothing else. " +
   "Point VIKUNJA_URL at the API root the instance actually serves.";
@@ -45,6 +53,25 @@ export interface TaskQuery {
   orderBy?: "asc" | "desc";
 }
 
+/**
+ * A non-2xx answer from Vikunja. The status and Vikunja's own `code` are carried as fields, not
+ * only baked into the message, so the layers above can branch on an outcome: 404 is "no such
+ * task" and tells the resolver its cached project map is stale, 401 is "check the token". The
+ * alternative is every caller matching on message text, which would make the wording of that
+ * message load-bearing.
+ */
+export class VikunjaHttpError extends Error {
+  readonly status: number;
+  readonly code: number | undefined;
+
+  constructor(message: string, status: number, code?: number) {
+    super(message);
+    this.name = "VikunjaHttpError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 export interface ClientOptions {
   /** Items per request. Lower values exist to exercise pagination; production uses the default. */
   pageSize?: number;
@@ -65,9 +92,8 @@ export class VikunjaClient {
     return this.#requestAll<RawProject>("/projects");
   }
 
-  async getProject(id: number): Promise<RawProject> {
-    const response = await this.#request<RawProject>("GET", `/projects/${id}`);
-    return response.data;
+  getProject(id: number): Promise<RawProject> {
+    return this.#requestObject<RawProject>("GET", `/projects/${id}`);
   }
 
   // --- tasks ------------------------------------------------------------------
@@ -86,16 +112,12 @@ export class VikunjaClient {
     });
   }
 
-  async getTask(id: number): Promise<RawTask> {
-    const response = await this.#request<RawTask>("GET", `/tasks/${id}`);
-    return response.data;
+  getTask(id: number): Promise<RawTask> {
+    return this.#requestObject<RawTask>("GET", `/tasks/${id}`);
   }
 
-  async createTask(projectId: number, task: TaskWrite): Promise<RawTask> {
-    const response = await this.#request<RawTask>("PUT", `/projects/${projectId}/tasks`, {
-      body: task,
-    });
-    return response.data;
+  createTask(projectId: number, task: TaskWrite): Promise<RawTask> {
+    return this.#requestObject<RawTask>("PUT", `/projects/${projectId}/tasks`, { body: task });
   }
 
   /**
@@ -111,10 +133,9 @@ export class VikunjaClient {
    */
   async updateTask(id: number, task: TaskWrite): Promise<RawTask> {
     const current = await this.getTask(id);
-    const response = await this.#request<RawTask>("POST", `/tasks/${id}`, {
+    return this.#requestObject<RawTask>("POST", `/tasks/${id}`, {
       body: { ...current, ...task },
     });
-    return response.data;
   }
 
   async deleteTask(id: number): Promise<void> {
@@ -133,11 +154,10 @@ export class VikunjaClient {
     return this.#requestAll<RawComment>(`/tasks/${taskId}/comments`);
   }
 
-  async createComment(taskId: number, comment: string): Promise<RawComment> {
-    const response = await this.#request<RawComment>("PUT", `/tasks/${taskId}/comments`, {
+  createComment(taskId: number, comment: string): Promise<RawComment> {
+    return this.#requestObject<RawComment>("PUT", `/tasks/${taskId}/comments`, {
       body: { comment },
     });
-    return response.data;
   }
 
   // --- transport --------------------------------------------------------------
@@ -152,12 +172,33 @@ export class VikunjaClient {
     const items = first.data ?? [];
     const totalPages = readTotalPages(first.headers);
 
+    if (totalPages > MAX_PAGES) {
+      throw new Error(
+        `Vikunja GET ${path} reports ${totalPages} pages, past the ${MAX_PAGES} this client will walk. Narrow the request with a filter.`,
+      );
+    }
+
     for (let page = 2; page <= totalPages; page++) {
       const next = await this.#requestPage<T>(path, query, page);
       items.push(...(next.data ?? []));
     }
 
     return items;
+  }
+
+  /**
+   * For endpoints that owe us an object. `#request` reports an empty body as `null`, and
+   * without this the `null` would reach the layers above wearing a non-nullable type, to fail
+   * later as "cannot read properties of null" in a module with no idea which call produced it.
+   */
+  async #requestObject<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+    const response = await this.#request<T | null>(method, path, options);
+
+    if (response.data === null) {
+      throw new Error(`Vikunja ${method} ${path} returned an empty body where an object was due`);
+    }
+
+    return response.data;
   }
 
   #requestPage<T>(path: string, query: Query, page: number): Promise<Response_<T[] | null>> {
@@ -198,13 +239,14 @@ export class VikunjaClient {
 
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location") ?? "no Location header";
-      throw new Error(
+      throw new VikunjaHttpError(
         `Vikunja ${method} ${path} -> HTTP ${response.status} redirecting to ${location}. ${REDIRECT_REFUSAL}`,
+        response.status,
       );
     }
 
     if (!response.ok) {
-      throw new Error(formatHttpError(method, path, response.status, text));
+      throw httpError(method, path, response.status, text);
     }
 
     if (text === "") {
@@ -241,22 +283,32 @@ function readTotalPages(headers: Headers): number {
 }
 
 /** Vikunja errors are `{ code, message }`; anything else is surfaced as-is rather than swallowed. */
-function formatHttpError(method: string, path: string, status: number, body: string): string {
+function httpError(method: string, path: string, status: number, body: string): VikunjaHttpError {
   let detail = body.trim();
+  let code: number | undefined;
 
   try {
     const parsed: unknown = JSON.parse(body);
     if (typeof parsed === "object" && parsed !== null && "message" in parsed) {
-      const { message, code } = parsed as { message: unknown; code?: unknown };
-      if (typeof message === "string") {
-        detail = typeof code === "number" ? `${message} (code ${code})` : message;
+      const fields = parsed as { message: unknown; code?: unknown };
+      if (typeof fields.code === "number") {
+        code = fields.code;
+      }
+      // An empty `message` is worse than useless as the detail — keep the raw body instead.
+      if (typeof fields.message === "string" && fields.message !== "") {
+        detail = code === undefined ? fields.message : `${fields.message} (code ${code})`;
       }
     }
   } catch {
     // Not JSON — keep the raw body.
   }
 
-  return `Vikunja ${method} ${path} -> HTTP ${status}: ${detail === "" ? "<empty body>" : truncate(detail)}`;
+  const rendered = detail === "" ? "<empty body>" : truncate(detail);
+  return new VikunjaHttpError(
+    `Vikunja ${method} ${path} -> HTTP ${status}: ${rendered}`,
+    status,
+    code,
+  );
 }
 
 function describeCause(cause: unknown): string {
