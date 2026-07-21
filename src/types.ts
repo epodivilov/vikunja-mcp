@@ -58,7 +58,11 @@ export interface RawTask {
   due_date: string;
   /** Per-project sequence number; the key is `<project.identifier>-<index>`. */
   index: number;
-  /** Vikunja renders the key itself, e.g. "VMCP-2". Empty when the project has no identifier. */
+  /**
+   * Vikunja renders the key itself, e.g. "VMCP-2" — and falls back to "#<index>" when the
+   * project has no identifier, so on a read this is never empty. It IS empty on an update
+   * response, which is the one place the server does not fill it in.
+   */
   identifier: string;
   labels: RawLabel[] | null;
 }

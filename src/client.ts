@@ -10,13 +10,18 @@ import type { Config } from "./config.js";
 import type { RawComment, RawLabel, RawProject, RawTask, TaskWrite } from "./types.js";
 
 /**
- * Vikunja's `max_items_per_page` (1000 by default). Larger values are not rejected —
- * the server silently clamps them — so asking for "everything" in one request is not
- * an option and pagination has to be followed.
+ * An upper bound we ask for, not the page size we get. The server clamps `per_page` to its
+ * own `service.maxitemsperpage` (50 by default) without erroring, and derives
+ * `x-pagination-total-pages` from the clamped value — so asking for the ceiling yields the
+ * largest page a given instance allows, and pagination still has to be followed.
  */
 const PAGE_SIZE = 1000;
 
 const REQUEST_TIMEOUT_MS = 30_000;
+
+const REDIRECT_REFUSAL =
+  "Not followed: this server talks to VIKUNJA_URL and to nothing else. " +
+  "Point VIKUNJA_URL at the API root the instance actually serves.";
 
 type QueryValue = string | number | boolean | undefined;
 type Query = Record<string, QueryValue>;
@@ -93,9 +98,22 @@ export class VikunjaClient {
     return response.data;
   }
 
-  /** Partial update — only the fields present in `task` are sent. */
+  /**
+   * Read-modify-write, despite the name. `POST /tasks/{id}` is NOT a partial update: the
+   * handler binds the body onto an empty struct, writes a fixed column set, and explicitly
+   * re-zeroes everything the payload omitted — description, priority, due/start/end date,
+   * percent_done, hex_color — while assignees and reminders are replaced wholesale. Sending
+   * `{ done: true }` on its own would therefore strip the task bare.
+   *
+   * So the server's own representation is read back and the patch layered onto it. Spreading
+   * the raw object is what makes this safe: it still carries the fields `RawTask` does not
+   * declare (assignees, reminders, labels), and those are zeroed just the same.
+   */
   async updateTask(id: number, task: TaskWrite): Promise<RawTask> {
-    const response = await this.#request<RawTask>("POST", `/tasks/${id}`, { body: task });
+    const current = await this.getTask(id);
+    const response = await this.#request<RawTask>("POST", `/tasks/${id}`, {
+      body: { ...current, ...task },
+    });
     return response.data;
   }
 
@@ -156,6 +174,7 @@ export class VikunjaClient {
     const url = this.#url(path, options.query);
 
     let response: Response;
+    let text: string;
     try {
       response = await fetch(url, {
         method,
@@ -165,13 +184,24 @@ export class VikunjaClient {
           Accept: "application/json",
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        // "one host" has to be enforced here rather than assumed: the default is to follow
+        // redirects, which would let the configured server hand our traffic to another origin.
+        redirect: "manual",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      // Reading the body belongs inside the try. `fetch` settles as soon as headers arrive,
+      // so a stalled or reset connection — and the timeout above — fails here, not there.
+      text = await response.text();
     } catch (cause) {
       throw new Error(`Vikunja ${method} ${path} failed: ${describeCause(cause)}`, { cause });
     }
 
-    const text = await response.text();
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location") ?? "no Location header";
+      throw new Error(
+        `Vikunja ${method} ${path} -> HTTP ${response.status} redirecting to ${location}. ${REDIRECT_REFUSAL}`,
+      );
+    }
 
     if (!response.ok) {
       throw new Error(formatHttpError(method, path, response.status, text));
@@ -230,12 +260,39 @@ function formatHttpError(method: string, path: string, status: number, body: str
 }
 
 function describeCause(cause: unknown): string {
-  if (cause instanceof Error) {
-    return cause.name === "TimeoutError"
-      ? `no response within ${REQUEST_TIMEOUT_MS} ms`
-      : cause.message;
+  if (!(cause instanceof Error)) {
+    return String(cause);
   }
-  return String(cause);
+  if (cause.name === "TimeoutError") {
+    return `no response within ${REQUEST_TIMEOUT_MS} ms`;
+  }
+  const reason = findReason(cause);
+  return reason === undefined ? cause.message : `${cause.message} (${reason})`;
+}
+
+/**
+ * undici reports every connect, DNS and TLS failure as the same "fetch failed" and puts the
+ * real reason on `.cause`. Without unwrapping it, a Vikunja that is not running and a typo in
+ * VIKUNJA_URL produce identical messages.
+ */
+function findReason(error: Error): string | undefined {
+  let current: unknown = error.cause;
+
+  for (let depth = 0; depth < 5; depth++) {
+    if (!(current instanceof Error)) {
+      return undefined;
+    }
+    const code: unknown = (current as { code?: unknown }).code;
+    if (typeof code === "string") {
+      return code;
+    }
+    if (current.message !== "") {
+      return current.message;
+    }
+    current = current.cause;
+  }
+
+  return undefined;
 }
 
 function truncate(text: string, limit = 500): string {

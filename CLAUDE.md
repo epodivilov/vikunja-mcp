@@ -84,24 +84,42 @@ primary reason this project exists.
 
 ## Vikunja REST notes
 
+These describe **v2.3.0**, the version this server targets. Behaviour below has been read out of
+`go-vikunja/vikunja` at that tag; check the tag again before trusting any of it on a newer
+server. (Known drift: v2.4.0 adds `GET /projects/{project}/tasks/by-index/{index}`, which would
+collapse the whole key-resolution dance below into one request.)
+
 - A task has both `id` (global PK) and `index` (per-project sequence). The key is
   `<project.identifier>-<index>`, e.g. `INFRA-41`. An empty project identifier renders the key
   as `#<index>`.
 - A task also carries a ready-made `identifier` (`"VMCP-2"`), so the key does not have to be
-  assembled from the project — but it is empty when the project has no identifier, so the
-  `<identifier>-<index>` fallback still has to exist.
+  assembled from the project. On a read it is never empty: `setIdentifier` fills in `#<index>`
+  itself when the project has no identifier, so `identifier || fallback` never takes the
+  fallback and `identifier === ""` never detects anything. It IS empty on an update response —
+  `setIdentifier` is not called on that path — so anything deriving a ref from `updateTask`
+  output has to assemble `<project.identifier>-<index>` from `index`.
 - There is no "get by key" endpoint. Resolve: project by identifier -> `GET /tasks` with
   `filter=project_id = <id>` (paginated) -> match `index` -> global id. Cache the project ->
   identifier map. Do NOT use `GET /projects/{id}/tasks`: it still answers, but v2.3.0 documents
   only `PUT` on that path. Do NOT use `GET /projects/{id}/views/{view}/tasks` either — it applies
   the view's own filter (the default List view hides done tasks) and silently returns a subset.
 - Pagination headers: `x-pagination-total-pages`, `x-pagination-result-count`.
-  `max_items_per_page` is 1000; a larger `per_page` is clamped without an error, so paging is
-  mandatory. An empty collection reports `x-pagination-total-pages: 0` — fetch page 1, then walk
-  up to the total.
-- `POST /tasks/{id}` is a genuine partial update: omitted fields are preserved. Project update
-  is the exception — it zeroes omitted numeric fields (e.g. `position`), so send the fields you
-  intend to keep.
+  `max_items_per_page` (`service.maxitemsperpage`) defaults to **50**, not 1000; a larger
+  `per_page` is clamped without an error and the page count is derived from the clamped value,
+  so paging is mandatory. Asking for 1000 is still right — it resolves to the largest page a
+  given instance allows. An empty collection reports `x-pagination-total-pages: 0` — fetch page
+  1, then walk up to the total.
+- `POST /tasks/{id}` is **not** a partial update. The handler binds the body onto an empty
+  struct and writes a fixed 14-column set, then explicitly re-zeroes every field the payload
+  omitted (`tasks.go`, the block commented "Mergo does ignore nil values"): `description`,
+  `done`, `priority`, `due_date`, `start_date`, `end_date`, `repeat_after`, `hex_color`,
+  `percent_done`, `is_favorite`. Assignees and reminders are replaced wholesale, and an empty
+  list deletes them. So `{ done: true }` alone strips the task bare — read the task and send it
+  back with the patch applied, which is what `client.updateTask` does. The genuine partial path
+  (an explicit `fields` list) is reachable only from `POST /tasks/bulk`.
+- Project update differs again: it writes a fixed column set, so omitted numeric fields (e.g.
+  `position`) are zeroed — but an omitted `description` is preserved. Send the fields you intend
+  to keep.
 
 ## Checks
 
