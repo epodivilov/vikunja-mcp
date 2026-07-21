@@ -11,6 +11,7 @@ import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
 import { toLeanTask, toTaskWrite } from "../projection.js";
 import type { Resolver } from "../resolver.js";
+import { jsonResult } from "./result.js";
 import { clearableDueField, priorityField } from "./task-fields.js";
 import { resolveTaskTarget, taskTargetShape } from "./task-target.js";
 
@@ -70,7 +71,7 @@ export function registerUpdateTaskTool(
       // the one field of this answer that has to be right.
       const updated = await client.getTask(target.id);
 
-      return { content: [{ type: "text", text: JSON.stringify(toLeanTask(updated)) }] };
+      return jsonResult(toLeanTask(updated));
     },
   );
 }

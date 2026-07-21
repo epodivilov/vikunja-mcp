@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
 import { markdownToHtml, toLeanTask } from "../projection.js";
 import type { Resolver } from "../resolver.js";
+import { jsonResult } from "./result.js";
 import { resolveTaskTarget, taskTargetShape } from "./task-target.js";
 
 export function registerCommentTaskTool(
@@ -36,9 +37,7 @@ export function registerCommentTaskTool(
       // task the comment landed on, which is the one thing worth answering with.
       const { ref } = toLeanTask(target);
 
-      return {
-        content: [{ type: "text", text: JSON.stringify({ ref, commentId: created.id }) }],
-      };
+      return jsonResult({ ref, commentId: created.id });
     },
   );
 }

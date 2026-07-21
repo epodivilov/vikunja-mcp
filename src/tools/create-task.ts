@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
 import { toLeanTask, toTaskWrite } from "../projection.js";
 import type { Resolver } from "../resolver.js";
+import { jsonResult } from "./result.js";
 import { dueField, priorityField } from "./task-fields.js";
 
 export function registerCreateTaskTool(
@@ -86,7 +87,7 @@ export function registerCreateTaskTool(
       // just attached. A read is the only answer that describes the task as it now is.
       const task = await client.getTask(created.id);
 
-      return { content: [{ type: "text", text: JSON.stringify(toLeanTask(task)) }] };
+      return jsonResult(toLeanTask(task));
     },
   );
 }

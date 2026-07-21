@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
 import { toLeanTask } from "../projection.js";
 import type { Resolver } from "../resolver.js";
+import { jsonResult } from "./result.js";
 import { resolveTaskTarget, taskTargetShape } from "./task-target.js";
 
 export function registerCompleteTaskTool(
@@ -45,7 +46,7 @@ export function registerCompleteTaskTool(
       // the server rather than by us.
       const completed = await client.getTask(target.id);
 
-      return { content: [{ type: "text", text: JSON.stringify(toLeanTask(completed)) }] };
+      return jsonResult(toLeanTask(completed));
     },
   );
 }

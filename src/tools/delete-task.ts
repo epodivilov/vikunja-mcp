@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
 import { toLeanTask } from "../projection.js";
 import type { Resolver } from "../resolver.js";
+import { jsonResult } from "./result.js";
 import { resolveTaskTarget, taskTargetShape } from "./task-target.js";
 
 export function registerDeleteTaskTool(
@@ -36,11 +37,7 @@ export function registerDeleteTaskTool(
 
       await client.deleteTask(target.id);
 
-      return {
-        content: [
-          { type: "text", text: JSON.stringify({ deleted: true, ref, id: target.id, title }) },
-        ],
-      };
+      return jsonResult({ deleted: true, ref, id: target.id, title });
     },
   );
 }
