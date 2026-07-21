@@ -59,6 +59,14 @@ export interface TaskQuery {
    * done = true` reads as `(project_id = 11 && done = false) || done = true` and answers with
    * every done task on the instance. Measured on 2.3.0: 356 rows for that expression against
    * 16 for the parenthesized one.
+   *
+   * **Trusted callers only.** Those parens narrow the common case; they are not a containment
+   * boundary. An expression that closes them itself — `done = false) || (done = true` — merges
+   * into a perfectly balanced string that widened the same live query from 16 rows to 357
+   * across six projects. Containing that would take a parser for a filter dialect we do not
+   * own, and it buys nothing today: no tool exposes this field, and the only caller inside the
+   * process writes the expression itself. A tool that ever does expose it has to solve
+   * containment first — this field must not be wired to model-supplied text as it stands.
    */
   filter?: string;
   /** Free-text search (`s` in the API). */
@@ -312,10 +320,12 @@ export class VikunjaClient {
 function buildTaskFilter(query: TaskQuery): string | undefined {
   const terms: string[] = [];
 
+  // Both structured values are interpolated into a filter expression, so both are checked
+  // rather than trusted. A static type is a compile-time promise, and these arrive over MCP as
+  // JSON that was parsed, not proved; anything that is not the value it claims to be would
+  // travel to the server as syntax and come back as a parse error naming a field the caller
+  // never mentioned.
   if (query.projectId !== undefined) {
-    // Interpolated into a filter expression, so it is checked rather than trusted: a NaN or a
-    // float would travel to the server as part of the syntax and come back as a parse error
-    // naming a field the caller never mentioned.
     if (!Number.isSafeInteger(query.projectId) || query.projectId <= 0) {
       throw new Error(`Project id must be a positive integer, got ${query.projectId}.`);
     }
@@ -323,6 +333,9 @@ function buildTaskFilter(query: TaskQuery): string | undefined {
   }
 
   if (query.done !== undefined) {
+    if (typeof query.done !== "boolean") {
+      throw new Error(`The done filter must be true or false, got ${JSON.stringify(query.done)}.`);
+    }
     terms.push(`done = ${query.done}`);
   }
 

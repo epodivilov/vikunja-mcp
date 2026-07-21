@@ -12,8 +12,6 @@ import { toLeanTask } from "../projection.js";
 import type { Resolver } from "../resolver.js";
 import { jsonResult } from "./result.js";
 
-const BARE_NUMBER = /^\d+$/;
-
 export function registerListTasksTool(
   server: McpServer,
   client: VikunjaClient,
@@ -25,10 +23,12 @@ export function registerListTasksTool(
       title: "List tasks",
       description:
         "Lists tasks as lean rows: { ref, id, title, done, priority?, due?, labels }. `ref` " +
-        "(INFRA-41) is how every other tool addresses a task. Every matching task is " +
-        "returned — the result is never truncated — so filter by project unless you really " +
-        "want every task on the instance. Descriptions are not included; read one task with " +
-        "vikunja_get_task for that.",
+        "(INFRA-41) is how every other tool addresses a task. Every matching task is returned " +
+        "— the result is never paginated away — so filter by project unless you really want " +
+        "every task on the instance. One exception, and it is Vikunja's: tasks of archived " +
+        "projects are in no task listing at all, whatever the filter says. Read one of those " +
+        "by id with vikunja_get_task, or unarchive the project. Descriptions are not included; " +
+        "read one task with vikunja_get_task for that.",
       inputSchema: {
         project: z
           .string()
@@ -64,10 +64,10 @@ export function registerListTasksTool(
 /**
  * The project to narrow to, as an id, or undefined for "every project".
  *
- * A bare number in `project` is refused rather than resolved. Vikunja would happily look for a
- * project whose key is literally "11" and answer "no project has that key", which reads as a
- * missing project when the real mistake was an id in the key's place — and the two are exactly
- * what this server exists to keep apart.
+ * Which of the two arguments was given is this layer's business; what a key means, whether a
+ * bare number is one, and whether the project it names can answer a task query at all are the
+ * resolver's. Hence the single call: everything that could be said about the key is said there,
+ * once, for every tool that resolves one.
  */
 async function projectFilter(
   resolver: Resolver,
@@ -84,17 +84,5 @@ async function projectFilter(
     return projectId;
   }
 
-  if (project === undefined) {
-    return undefined;
-  }
-
-  const key = project.trim();
-
-  if (BARE_NUMBER.test(key)) {
-    throw new Error(
-      `"${key}" is a bare number, and a project is addressed by its key — e.g. INFRA. If you really mean the global id, pass it as { projectId: ${key} }.`,
-    );
-  }
-
-  return resolver.resolveProjectKey(key);
+  return project === undefined ? undefined : resolver.resolveProjectForTasks(project);
 }

@@ -16,10 +16,11 @@ export function registerListProjectsTool(server: McpServer, client: VikunjaClien
     {
       title: "List projects",
       description:
-        "Lists every project as { key, id, title }. The key (e.g. INFRA) is the prefix of " +
-        "every task key in that project (INFRA-41), so this is the tool to call before " +
-        "naming a project anywhere else. Archived projects are listed too, and a project " +
-        "with no key at all comes back with an empty one — its tasks are reachable by id only.",
+        "Lists every project as { key, id, title, archived? }. The key (e.g. INFRA) is the " +
+        "prefix of every task key in that project (INFRA-41), so this is the tool to call " +
+        "before naming a project anywhere else. `archived: true` marks a project whose tasks " +
+        "no task listing can return, whatever the filter says — read those by id. A project " +
+        "with no key at all comes back with an empty one; its tasks are reachable by id only.",
       annotations: { readOnlyHint: true },
     },
     async () => jsonResult((await client.listProjects()).map(toLeanProject)),

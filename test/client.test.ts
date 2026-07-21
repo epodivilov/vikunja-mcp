@@ -109,6 +109,18 @@ describe("listTasks filter assembly", () => {
     assert.throws(() => client.listTasks({ projectId: 0 }), /positive integer/);
   });
 
+  it("refuses a done filter that is not a boolean", async () => {
+    // The same interpolation site as projectId, so the same runtime check. The static type is a
+    // compile-time promise; these values arrive as parsed JSON, not as proved booleans.
+    captureRequests();
+    const client = new VikunjaClient(config);
+    const lying = (value: unknown) => client.listTasks({ done: value as boolean });
+
+    assert.throws(() => lying("false"), /true or false/);
+    assert.throws(() => lying(0), /true or false/);
+    assert.throws(() => lying(null), /true or false/);
+  });
+
   it("keeps search out of the filter expression", async () => {
     const urls = captureRequests();
     await new VikunjaClient(config).listTasks({ projectId: 11, search: "certs" });

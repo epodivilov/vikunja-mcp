@@ -102,6 +102,37 @@ export function parseTaskRef(input: string): TaskRef {
 }
 
 /**
+ * Normalises a project key: `infra` -> `INFRA`.
+ *
+ * A bare `11` is refused for the same reason `parseTaskRef` refuses one — it is a global id
+ * wearing a key's clothes. Vikunja would otherwise be asked for a project whose identifier is
+ * literally "11" and would answer "no project has that key", which reads as a missing project
+ * when the real mistake was an id in the key's place.
+ *
+ * The rule lives here rather than in a tool so that every caller of a project key gets the same
+ * refusal. A tool-local copy only guards the one tool that remembers to run it.
+ */
+export function parseProjectKey(input: string): string {
+  const key = input.trim();
+
+  if (key === "") {
+    throw new Error("A project key is required, e.g. INFRA.");
+  }
+
+  if (BARE_NUMBER.test(key)) {
+    throw new Error(
+      `"${key}" is a bare number, and a project is addressed by its key — e.g. INFRA. If you really mean the global id, pass it as { projectId: ${key} }.`,
+    );
+  }
+
+  if (!PREFIX.test(key)) {
+    throw new Error(`"${input}" is not a project key. Expected an identifier such as INFRA.`);
+  }
+
+  return key.toUpperCase();
+}
+
+/**
  * Renders a key from the two fields it is actually made of.
  *
  * Deliberately not `RawTask.identifier`: the server fills that in on a read but not on the
@@ -146,13 +177,33 @@ export class Resolver {
 
   /** `INFRA` -> project id. */
   async resolveProjectKey(key: string): Promise<number> {
-    const prefix = key.trim().toUpperCase();
-
-    if (!PREFIX.test(prefix)) {
-      throw new Error(`"${key}" is not a project key. Expected an identifier such as INFRA.`);
-    }
+    const prefix = parseProjectKey(key);
 
     return (await this.#project(prefix, "project")).id;
+  }
+
+  /**
+   * `INFRA` -> project id, for narrowing a task query to it.
+   *
+   * Refuses an archived project rather than handing back an id that queries fine and matches
+   * nothing. `GET /tasks` builds its collection from the user's non-archived projects and takes
+   * no parameter to widen it, so a filter naming an archived project answers `[]` — a result
+   * shaped exactly like "this project has no tasks", which is a different and false statement.
+   * `resolveTask` already refuses a key in an archived project for the same reason; this is the
+   * same refusal on the listing path, so the two tools stop telling different stories about the
+   * same project.
+   */
+  async resolveProjectForTasks(key: string): Promise<number> {
+    const prefix = parseProjectKey(key);
+    const project = await this.#project(prefix, "project");
+
+    if (project.archived) {
+      throw new Error(
+        `Cannot list the tasks of ${prefix} (id ${project.id}): the project is archived, and Vikunja does not list tasks of archived projects. Read a task of it as { id: <global id> }, or unarchive the project.`,
+      );
+    }
+
+    return project.id;
   }
 
   /**

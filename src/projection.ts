@@ -129,7 +129,16 @@ export function toLeanLabel(raw: RawLabel): LeanLabel {
 }
 
 export function toLeanProject(raw: RawProject): LeanProject {
-  return { key: raw.identifier, id: raw.id, title: raw.title };
+  const project: LeanProject = { key: raw.identifier, id: raw.id, title: raw.title };
+
+  // Set only when true, like every other optional field here: a listing of live projects stays
+  // exactly as lean as it was, and the flag shows up only where it changes what a caller can
+  // expect of the project's tasks.
+  if (raw.is_archived) {
+    project.archived = true;
+  }
+
+  return project;
 }
 
 export function toLeanTask(raw: RawTask): LeanTask {

@@ -143,8 +143,18 @@ describe("toLeanProject / toLeanLabel", () => {
   });
 
   it("drops the fields a listing has no use for", () => {
-    const lean = toLeanProject({ ...bareProject, description: "<p>noise</p>", is_archived: true });
+    const lean = toLeanProject({ ...bareProject, description: "<p>noise</p>" });
     assert.deepEqual(Object.keys(lean).sort(), ["id", "key", "title"]);
+  });
+
+  it("marks an archived project, whose tasks no task listing can return", () => {
+    const lean = toLeanProject({ ...bareProject, is_archived: true });
+    assert.equal(lean.archived, true);
+    assert.deepEqual(Object.keys(lean).sort(), ["archived", "id", "key", "title"]);
+  });
+
+  it("omits the flag on a live project rather than carrying a false", () => {
+    assert.equal("archived" in toLeanProject(bareProject), false);
   });
 
   it("maps a label", () => {
