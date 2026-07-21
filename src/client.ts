@@ -88,8 +88,16 @@ export class VikunjaClient {
 
   // --- projects ---------------------------------------------------------------
 
+  /**
+   * Archived projects included. Without `is_archived` the server appends
+   * `HAVING MAX(all_projects.is_archived) = 0` and drops them — along with anything under an
+   * archived parent, since a child inherits the flag. The resolver builds its key map from this
+   * call, so omitting them would answer a perfectly good `OLD-4` with "no project has that key":
+   * false, and not fixable from the agent's side. Reads of an archived task are legitimate, and
+   * writes to one the server refuses on its own.
+   */
   listProjects(): Promise<RawProject[]> {
-    return this.#requestAll<RawProject>("/projects");
+    return this.#requestAll<RawProject>("/projects", { is_archived: true });
   }
 
   getProject(id: number): Promise<RawProject> {

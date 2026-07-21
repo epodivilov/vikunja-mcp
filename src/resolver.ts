@@ -34,11 +34,21 @@ export interface TaskRef {
  */
 type ProjectMap = Map<string, number[]>;
 
+/** Which escape hatch an ambiguous prefix should point at — a task and a project differ. */
+type Subject = "task" | "project";
+
 const BARE_NUMBER = /^\d+$/;
 /** `#41` is what Vikunja renders for a project that has no identifier. */
 const ANONYMOUS_REF = /^#\d+$/;
 /** Identifiers are upper-case alphanumerics in the UI; dashes are allowed for the same reason. */
 const PREFIX = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * How long a loaded project map answers "no such prefix" on its own authority. Past it, one
+ * miss buys one `GET /projects` — enough to pick up a project created since, without turning a
+ * mistyped key into a listing per call.
+ */
+const RELOAD_INTERVAL_MS = 30_000;
 
 /**
  * Splits `INFRA-41` into prefix and index.
@@ -91,13 +101,25 @@ export function parseTaskRef(input: string): TaskRef {
  * Deliberately not `RawTask.identifier`: the server fills that in on a read but not on the
  * response to an update, where it merely echoes whatever the request carried. Deriving the key
  * from `index` is correct on every path.
+ *
+ * The `#41` an identifier-less project produces is a rendering, not an address: `parseTaskRef`
+ * rejects it, because it names no project. Such a task is reachable only by its global id.
  */
 export function formatRef(projectIdentifier: string, index: number): string {
   return projectIdentifier === "" ? `#${index}` : `${projectIdentifier}-${index}`;
 }
 
+export interface ResolverOptions {
+  /**
+   * How long the project map is trusted before a missing prefix may trigger a reload. Lower
+   * values exist to exercise the reload path in tests; production uses the default.
+   */
+  reloadIntervalMs?: number;
+}
+
 export class Resolver {
   readonly #client: ResolverClient;
+  readonly #reloadIntervalMs: number;
 
   /**
    * The in-flight promise, not the resolved map, so concurrent tool calls on a cold cache share
@@ -105,8 +127,15 @@ export class Resolver {
    */
   #projects: Promise<ProjectMap> | null = null;
 
-  constructor(client: ResolverClient) {
+  /** When the map currently in `#projects` arrived; 0 while none has. */
+  #loadedAt = 0;
+
+  /** A reload in flight, shared so that concurrent misses do not each buy their own listing. */
+  #reloading: Promise<ProjectMap> | null = null;
+
+  constructor(client: ResolverClient, options: ResolverOptions = {}) {
     this.#client = client;
+    this.#reloadIntervalMs = options.reloadIntervalMs ?? RELOAD_INTERVAL_MS;
   }
 
   /** `INFRA` -> project id. */
@@ -117,19 +146,23 @@ export class Resolver {
       throw new Error(`"${key}" is not a project key. Expected an identifier such as INFRA.`);
     }
 
-    return this.#projectId(prefix);
+    return this.#projectId(prefix, "project");
   }
 
   /**
-   * `INFRA-41` -> global task id.
+   * `INFRA-41` -> the task itself.
    *
    * One request: v2.3.0 accepts `index` in a filter expression, so the key resolves without
    * walking the project's task list. (v2.4.0 adds `GET /projects/{id}/tasks/by-index/{index}`,
    * which would replace the filter with a path — this method is the only place that would change.)
+   *
+   * The task is returned rather than only its id because that request already paid for it, and
+   * the caller that wants to read it would otherwise fetch the same row again. Callers needing
+   * just the id take `.id`.
    */
-  async resolveTaskRef(ref: string): Promise<number> {
+  async resolveTask(ref: string): Promise<RawTask> {
     const { prefix, index } = parseTaskRef(ref);
-    const projectId = await this.#projectId(prefix);
+    const projectId = await this.#projectId(prefix, "task");
     const tasks = await this.#client.listTasks({
       filter: `project_id = ${projectId} && index = ${index}`,
     });
@@ -145,17 +178,19 @@ export class Resolver {
       );
     }
 
-    return match.id;
+    return match;
   }
 
   /**
-   * An unknown prefix triggers exactly one reload before it is reported missing — a project
-   * created after this process started is the common case, and a permanent 404 for it would
-   * make the cache a liability. Bounded at one so a typo does not re-list projects on every call.
+   * A prefix the map does not know is worth one `GET /projects` before it is called missing — a
+   * project created after this process started is the common case, and a permanent "no such key"
+   * for it would make the cache a liability. The reload is rate-limited rather than counted:
+   * within `RELOAD_INTERVAL_MS` of the last successful load the map answers on its own, so a
+   * mistyped key costs nothing and a cold start does not list projects twice in a row.
    */
-  async #projectId(prefix: string): Promise<number> {
-    const cached = (await this.#projectMap(false)).get(prefix);
-    const ids = cached ?? (await this.#projectMap(true)).get(prefix);
+  async #projectId(prefix: string, subject: Subject): Promise<number> {
+    const map = await this.#projectMap();
+    const ids = map.get(prefix) ?? (await this.#refresh(map)).get(prefix);
     const [id, ...rest] = ids ?? [];
 
     if (id === undefined) {
@@ -163,31 +198,67 @@ export class Resolver {
     }
 
     if (rest.length > 0) {
+      const all = [id, ...rest].join(", ");
       throw new Error(
-        `The key "${prefix}" belongs to ${rest.length + 1} projects (ids ${[id, ...rest].join(", ")}), so a task key using it is ambiguous. Address the task as { id: <global id> }.`,
+        subject === "task"
+          ? `The key "${prefix}" belongs to ${rest.length + 1} projects (ids ${all}), so a task key using it is ambiguous. Address the task as { id: <global id> }.`
+          : `The key "${prefix}" belongs to ${rest.length + 1} projects (ids ${all}), so it does not identify one. Address the project by its id: one of ${all}.`,
       );
     }
 
     return id;
   }
 
-  #projectMap(reload: boolean): Promise<ProjectMap> {
-    if (!reload && this.#projects !== null) {
+  /** The cold path: one load, shared by everyone who arrives while it is in flight. */
+  #projectMap(): Promise<ProjectMap> {
+    if (this.#projects !== null) {
       return this.#projects;
     }
 
     const pending = this.#load();
     this.#projects = pending;
 
-    // A failed load must not be cached as the answer, or one network blip would leave the
-    // resolver permanently unable to see any project.
-    pending.catch(() => {
-      if (this.#projects === pending) {
-        this.#projects = null;
-      }
-    });
+    pending.then(
+      () => {
+        this.#loadedAt = Date.now();
+      },
+      () => {
+        // A failed load must not be cached as the answer, or one network blip would leave the
+        // resolver permanently unable to see any project.
+        if (this.#projects === pending) {
+          this.#projects = null;
+        }
+      },
+    );
 
     return pending;
+  }
+
+  /** The miss path. Returns the map in hand when it is too fresh to be worth re-listing. */
+  #refresh(current: ProjectMap): Promise<ProjectMap> {
+    if (Date.now() - this.#loadedAt < this.#reloadIntervalMs) {
+      return Promise.resolve(current);
+    }
+
+    this.#reloading ??= this.#reload();
+
+    return this.#reloading;
+  }
+
+  /**
+   * Publishes the new map only once it has arrived. Assigning the in-flight promise instead
+   * would put a load that has not succeeded — and may not — in front of a map that answers
+   * correctly, so an unrelated lookup of a known prefix would fail on someone else's typo.
+   */
+  async #reload(): Promise<ProjectMap> {
+    try {
+      const map = await this.#load();
+      this.#projects = Promise.resolve(map);
+      this.#loadedAt = Date.now();
+      return map;
+    } finally {
+      this.#reloading = null;
+    }
   }
 
   async #load(): Promise<ProjectMap> {

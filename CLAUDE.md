@@ -109,6 +109,12 @@ collapse the whole key-resolution dance below into one request.)
   documents only `PUT` on that path. Do NOT use `GET /projects/{id}/views/{view}/tasks` either —
   it applies the view's own filter (the default List view hides done tasks) and silently returns
   a subset.
+- `GET /projects` hides archived projects unless `is_archived=true` is passed: without it the
+  query gets `HAVING MAX(all_projects.is_archived) = 0` appended (`project.go` at v2.3.0), and a
+  child inherits the flag from an archived parent. The resolver builds its key map from that
+  call, so leaving the parameter off answers a valid key with "no project has that key" — a
+  false statement the agent cannot work around. `client.listProjects` therefore always asks for
+  archived projects; the server refuses writes to them on its own.
 - Project identifiers are unique, but the check is case-sensitive: creating a second `VMCP` is
   refused with code 3007, while `vmcp` alongside it is accepted (probed on 2.3.0). Key input has
   to be matched case-insensitively — the UI displays upper-case and an agent will type either —
