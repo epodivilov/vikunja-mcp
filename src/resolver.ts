@@ -40,6 +40,19 @@ interface ProjectEntry {
  */
 type ProjectMap = Map<string, ProjectEntry[]>;
 
+/**
+ * One `GET /projects`, indexed both ways a caller can arrive: by key and by global id.
+ *
+ * The id index is not a mirror of the key one. It holds the projects a key can never name —
+ * those with an empty identifier — because the id is precisely the address used for them, and
+ * it answers the question the key index cannot: whether the project behind a raw id is archived,
+ * and therefore whether a task query naming it can return anything at all.
+ */
+interface ProjectIndex {
+  byKey: ProjectMap;
+  byId: Map<number, ProjectEntry>;
+}
+
 /** Which escape hatch an ambiguous prefix should point at — a task and a project differ. */
 type Subject = "task" | "project";
 
@@ -102,6 +115,37 @@ export function parseTaskRef(input: string): TaskRef {
 }
 
 /**
+ * Normalises a project key: `infra` -> `INFRA`.
+ *
+ * A bare `11` is refused for the same reason `parseTaskRef` refuses one — it is a global id
+ * wearing a key's clothes. Vikunja would otherwise be asked for a project whose identifier is
+ * literally "11" and would answer "no project has that key", which reads as a missing project
+ * when the real mistake was an id in the key's place.
+ *
+ * The rule lives here rather than in a tool so that every caller of a project key gets the same
+ * refusal. A tool-local copy only guards the one tool that remembers to run it.
+ */
+export function parseProjectKey(input: string): string {
+  const key = input.trim();
+
+  if (key === "") {
+    throw new Error("A project key is required, e.g. INFRA.");
+  }
+
+  if (BARE_NUMBER.test(key)) {
+    throw new Error(
+      `"${key}" is a bare number, and a project is addressed by its key — e.g. INFRA. If you really mean the global id, pass it as { projectId: ${key} }.`,
+    );
+  }
+
+  if (!PREFIX.test(key)) {
+    throw new Error(`"${input}" is not a project key. Expected an identifier such as INFRA.`);
+  }
+
+  return key.toUpperCase();
+}
+
+/**
  * Renders a key from the two fields it is actually made of.
  *
  * Deliberately not `RawTask.identifier`: the server fills that in on a read but not on the
@@ -128,16 +172,16 @@ export class Resolver {
   readonly #reloadIntervalMs: number;
 
   /**
-   * The in-flight promise, not the resolved map, so concurrent tool calls on a cold cache share
-   * one `GET /projects` instead of racing to issue their own.
+   * The in-flight promise, not the resolved index, so concurrent tool calls on a cold cache
+   * share one `GET /projects` instead of racing to issue their own.
    */
-  #projects: Promise<ProjectMap> | null = null;
+  #projects: Promise<ProjectIndex> | null = null;
 
-  /** When the map currently in `#projects` arrived; 0 while none has. */
+  /** When the index currently in `#projects` arrived; 0 while none has. */
   #loadedAt = 0;
 
   /** A reload in flight, shared so that concurrent misses do not each buy their own listing. */
-  #reloading: Promise<ProjectMap> | null = null;
+  #reloading: Promise<ProjectIndex> | null = null;
 
   constructor(client: ResolverClient, options: ResolverOptions = {}) {
     this.#client = client;
@@ -146,13 +190,62 @@ export class Resolver {
 
   /** `INFRA` -> project id. */
   async resolveProjectKey(key: string): Promise<number> {
-    const prefix = key.trim().toUpperCase();
-
-    if (!PREFIX.test(prefix)) {
-      throw new Error(`"${key}" is not a project key. Expected an identifier such as INFRA.`);
-    }
+    const prefix = parseProjectKey(key);
 
     return (await this.#project(prefix, "project")).id;
+  }
+
+  /**
+   * `INFRA` -> project id, for narrowing a task query to it.
+   *
+   * Refuses an archived project rather than handing back an id that queries fine and matches
+   * nothing. `GET /tasks` builds its collection from the user's non-archived projects and takes
+   * no parameter to widen it, so a filter naming an archived project answers `[]` — a result
+   * shaped exactly like "this project has no tasks", which is a different and false statement.
+   * `resolveTask` already refuses a key in an archived project for the same reason; this is the
+   * same refusal on the listing path, so the two tools stop telling different stories about the
+   * same project.
+   */
+  async resolveProjectForTasks(key: string): Promise<number> {
+    const prefix = parseProjectKey(key);
+    const project = await this.#project(prefix, "project");
+
+    if (project.archived) {
+      throw archivedProjectError(`${prefix} (id ${project.id})`);
+    }
+
+    return project.id;
+  }
+
+  /**
+   * A global project id, checked before a task query is narrowed to it.
+   *
+   * The id escape hatch reached the same two silent-empty answers the key path used to give, so
+   * it gets the same two refusals. An archived project is refused for the reason above. An id
+   * that names no project at all is refused too, rather than passed through to a filter that
+   * would answer `[]`: "this project has no tasks" and "there is no such project" are different
+   * facts, and only one of them is true. The key path has always drawn that line — an unknown
+   * key is an error, not an empty list — and the point of this method is that both inputs to one
+   * tool behave alike.
+   *
+   * A miss buys the same rate-limited reload a missing key does, so an id created since this
+   * process started is picked up rather than denied on a stale index.
+   */
+  async checkProjectIdForTasks(id: number): Promise<number> {
+    const index = await this.#index();
+    const project = index.byId.get(id) ?? (await this.#refresh(index)).byId.get(id);
+
+    if (project === undefined) {
+      throw new Error(
+        `No project has id ${id}. List projects to see the ids in use, and prefer the project key.`,
+      );
+    }
+
+    if (project.archived) {
+      throw archivedProjectError(`project ${id}`);
+    }
+
+    return id;
   }
 
   /**
@@ -202,8 +295,8 @@ export class Resolver {
    * mistyped key costs nothing and a cold start does not list projects twice in a row.
    */
   async #project(prefix: string, subject: Subject): Promise<ProjectEntry> {
-    const map = await this.#projectMap();
-    const entries = map.get(prefix) ?? (await this.#refresh(map)).get(prefix);
+    const index = await this.#index();
+    const entries = index.byKey.get(prefix) ?? (await this.#refresh(index)).byKey.get(prefix);
     const [project, ...rest] = entries ?? [];
 
     if (project === undefined) {
@@ -223,7 +316,7 @@ export class Resolver {
   }
 
   /** The cold path: one load, shared by everyone who arrives while it is in flight. */
-  #projectMap(): Promise<ProjectMap> {
+  #index(): Promise<ProjectIndex> {
     if (this.#projects !== null) {
       return this.#projects;
     }
@@ -247,8 +340,8 @@ export class Resolver {
     return pending;
   }
 
-  /** The miss path. Returns the map in hand when it is too fresh to be worth re-listing. */
-  #refresh(current: ProjectMap): Promise<ProjectMap> {
+  /** The miss path. Returns the index in hand when it is too fresh to be worth re-listing. */
+  #refresh(current: ProjectIndex): Promise<ProjectIndex> {
     if (Date.now() - this.#loadedAt < this.#reloadIntervalMs) {
       return Promise.resolve(current);
     }
@@ -259,41 +352,58 @@ export class Resolver {
   }
 
   /**
-   * Publishes the new map only once it has arrived. Assigning the in-flight promise instead
-   * would put a load that has not succeeded — and may not — in front of a map that answers
+   * Publishes the new index only once it has arrived. Assigning the in-flight promise instead
+   * would put a load that has not succeeded — and may not — in front of an index that answers
    * correctly, so an unrelated lookup of a known prefix would fail on someone else's typo.
    */
-  async #reload(): Promise<ProjectMap> {
+  async #reload(): Promise<ProjectIndex> {
     try {
-      const map = await this.#load();
-      this.#projects = Promise.resolve(map);
+      const index = await this.#load();
+      this.#projects = Promise.resolve(index);
       this.#loadedAt = Date.now();
-      return map;
+      return index;
     } finally {
       this.#reloading = null;
     }
   }
 
-  async #load(): Promise<ProjectMap> {
-    const map: ProjectMap = new Map();
+  async #load(): Promise<ProjectIndex> {
+    const byKey: ProjectMap = new Map();
+    const byId = new Map<number, ProjectEntry>();
 
     for (const project of await this.#client.listProjects()) {
+      const entry: ProjectEntry = { id: project.id, archived: project.is_archived };
+
+      // Indexed by id before the key check, deliberately: a project with no identifier is
+      // exactly the one a caller has to address by id, so it must be in this map even though
+      // no key will ever reach it.
+      byId.set(project.id, entry);
+
       // Projects without an identifier have no key and cannot be addressed by one.
       if (project.identifier === "") {
         continue;
       }
 
       const key = project.identifier.toUpperCase();
-      const entry: ProjectEntry = { id: project.id, archived: project.is_archived };
-      const entries = map.get(key);
+      const entries = byKey.get(key);
 
       if (entries === undefined) {
-        map.set(key, [entry]);
+        byKey.set(key, [entry]);
       } else {
         entries.push(entry);
       }
     }
 
-    return map;
+    return { byKey, byId };
   }
+}
+
+/**
+ * The one sentence both listing paths tell about an archived project, so a key and an id cannot
+ * drift into describing the same project differently.
+ */
+function archivedProjectError(subject: string): Error {
+  return new Error(
+    `Cannot list the tasks of ${subject}: the project is archived, and Vikunja does not list tasks of archived projects. Read a task of it as { id: <global id> }, or unarchive the project.`,
+  );
 }

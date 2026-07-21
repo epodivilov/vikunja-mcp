@@ -8,6 +8,15 @@ export interface LeanProject {
   key: string;
   id: number;
   title: string;
+  /**
+   * Present, and only ever `true`, when the project is archived; absent means live.
+   *
+   * Carried because an archived project is not a live one with a flag on it: Vikunja builds the
+   * `GET /tasks` collection from non-archived projects only, so every task in it is invisible to
+   * every task query. Rendering it identically to a live project invites a caller to ask a
+   * question that can only come back empty.
+   */
+  archived?: true;
 }
 
 export interface LeanTask {

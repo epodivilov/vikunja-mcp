@@ -45,7 +45,29 @@ interface Response_<T> {
 }
 
 export interface TaskQuery {
-  /** Vikunja filter expression, e.g. `project_id = 11 && done = false`. Passed through verbatim. */
+  /** Restrict to one project, by global id. */
+  projectId?: number;
+  /** Restrict by completion state. Omitted means both, which is what `GET /tasks` returns. */
+  done?: boolean;
+  /**
+   * Escape hatch for expressions the fields above do not cover, e.g. `priority >= 4`. Written
+   * in Vikunja's own filter syntax and therefore the one place a caller has to know it.
+   *
+   * It is ANDed with the fields above rather than replacing them: dropping either side would
+   * silently answer a different question than the one asked. When it is combined it is
+   * parenthesized, because `&&` binds tighter than `||` — `project_id = 11 && done = false ||
+   * done = true` reads as `(project_id = 11 && done = false) || done = true` and answers with
+   * every done task on the instance. Measured on 2.3.0: 356 rows for that expression against
+   * 16 for the parenthesized one.
+   *
+   * **Trusted callers only.** Those parens narrow the common case; they are not a containment
+   * boundary. An expression that closes them itself — `done = false) || (done = true` — merges
+   * into a perfectly balanced string that widened the same live query from 16 rows to 357
+   * across six projects. Containing that would take a parser for a filter dialect we do not
+   * own, and it buys nothing today: no tool exposes this field, and the only caller inside the
+   * process writes the expression itself. A tool that ever does expose it has to solve
+   * containment first — this field must not be wired to model-supplied text as it stands.
+   */
   filter?: string;
   /** Free-text search (`s` in the API). */
   search?: string;
@@ -110,10 +132,14 @@ export class VikunjaClient {
    * Lists tasks across projects. Uses `GET /tasks` with a filter rather than the
    * legacy `GET /projects/{id}/tasks`, which is undocumented in v2.3.0, and rather
    * than the per-view endpoint, which silently applies that view's own filter.
+   *
+   * The filter expression is assembled here, from structured fields, so that the layers above
+   * never have to spell `project_id = 11 && done = false` themselves — that string is Vikunja
+   * dialect, and this is the layer that owns it.
    */
   listTasks(query: TaskQuery = {}): Promise<RawTask[]> {
     return this.#requestAll<RawTask>("/tasks", {
-      filter: query.filter,
+      filter: buildTaskFilter(query),
       s: query.search,
       sort_by: query.sortBy,
       order_by: query.orderBy,
@@ -281,6 +307,44 @@ export class VikunjaClient {
     const queryString = search.toString();
     return `${this.#config.baseUrl}${path}${queryString === "" ? "" : `?${queryString}`}`;
   }
+}
+
+/**
+ * A `TaskQuery` as one Vikunja filter expression, or undefined when it constrains nothing.
+ *
+ * Terms are joined with `&&` in a fixed order so the same query always produces the same string.
+ * The caller-supplied expression goes last and parenthesized — see `TaskQuery.filter` for why
+ * that paren is load-bearing rather than decorative. A lone expression is passed through
+ * untouched, so a caller that wants exactly what it wrote still gets exactly what it wrote.
+ */
+function buildTaskFilter(query: TaskQuery): string | undefined {
+  const terms: string[] = [];
+
+  // Both structured values are interpolated into a filter expression, so both are checked
+  // rather than trusted. A static type is a compile-time promise, and these arrive over MCP as
+  // JSON that was parsed, not proved; anything that is not the value it claims to be would
+  // travel to the server as syntax and come back as a parse error naming a field the caller
+  // never mentioned.
+  if (query.projectId !== undefined) {
+    if (!Number.isSafeInteger(query.projectId) || query.projectId <= 0) {
+      throw new Error(`Project id must be a positive integer, got ${query.projectId}.`);
+    }
+    terms.push(`project_id = ${query.projectId}`);
+  }
+
+  if (query.done !== undefined) {
+    if (typeof query.done !== "boolean") {
+      throw new Error(`The done filter must be true or false, got ${JSON.stringify(query.done)}.`);
+    }
+    terms.push(`done = ${query.done}`);
+  }
+
+  const filter = query.filter?.trim();
+  if (filter !== undefined && filter !== "") {
+    terms.push(terms.length === 0 ? filter : `(${filter})`);
+  }
+
+  return terms.length === 0 ? undefined : terms.join(" && ");
 }
 
 /** Missing header means we cannot know of more pages — treat the page in hand as all of it. */

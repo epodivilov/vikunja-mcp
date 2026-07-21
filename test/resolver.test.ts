@@ -6,7 +6,13 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Resolver, type ResolverClient, formatRef, parseTaskRef } from "../src/resolver.ts";
+import {
+  Resolver,
+  type ResolverClient,
+  formatRef,
+  parseProjectKey,
+  parseTaskRef,
+} from "../src/resolver.ts";
 import type { RawProject, RawTask } from "../src/types.ts";
 
 function project(id: number, identifier: string, isArchived = false): RawProject {
@@ -108,6 +114,29 @@ describe("parseTaskRef", () => {
 
   it("rejects index 0, since numbering starts at 1", () => {
     assert.throws(() => parseTaskRef("INFRA-0"), /starts at 1/);
+  });
+});
+
+describe("parseProjectKey", () => {
+  it("upper-cases and trims", () => {
+    assert.equal(parseProjectKey("  infra "), "INFRA");
+  });
+
+  it("rejects a bare number and names the escape hatch", () => {
+    // The rule that makes this worth having at all: Vikunja would look for a project whose
+    // identifier is literally "11" and report it missing, which hides an id-for-key mix-up
+    // behind a message about a project that does exist.
+    assert.throws(() => parseProjectKey("11"), /\{ projectId: 11 \}/);
+  });
+
+  it("rejects an empty key", () => {
+    assert.throws(() => parseProjectKey("   "), /A project key is required/);
+  });
+
+  it("rejects a key that is not an identifier", () => {
+    for (const input of ["IN FRA", "INFRA!", "in.fra"]) {
+      assert.throws(() => parseProjectKey(input), /not a project key/, `accepted ${input}`);
+    }
   });
 });
 
@@ -275,6 +304,85 @@ describe("Resolver", () => {
     const client = stubClient([project(7, "INFRA"), project(20, "OLD", true)], TASKS);
 
     assert.equal((await new Resolver(client).resolveTask("INFRA-41")).id, 301);
+  });
+
+  it("refuses to narrow a task query to an archived project", async () => {
+    // The id resolves perfectly well; it is the query that cannot work. Handing it back would
+    // produce an empty listing shaped exactly like "this project has no tasks", so the listing
+    // path refuses with the same story `resolveTask` tells about the same project.
+    const client = stubClient([project(20, "OLD", true)], []);
+
+    await assert.rejects(
+      () => new Resolver(client).resolveProjectForTasks("OLD"),
+      /is archived, and Vikunja does not list tasks of archived projects/,
+    );
+  });
+
+  it("narrows a task query to a live project", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    assert.equal(await new Resolver(client).resolveProjectForTasks("vmcp"), 11);
+  });
+
+  it("refuses a bare number on the task-query path too", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    await assert.rejects(
+      () => new Resolver(client).resolveProjectForTasks("11"),
+      /\{ projectId: 11 \}/,
+    );
+  });
+
+  it("refuses a bare number on the plain project path, which write tools resolve through", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    await assert.rejects(() => new Resolver(client).resolveProjectKey("11"), /\{ projectId: 11 \}/);
+  });
+
+  it("refuses to narrow a task query to an archived project id", async () => {
+    // The id escape hatch reached the same silent `[]` the key path used to, which would have
+    // left one tool telling two stories about one project depending on which input it was given.
+    const client = stubClient([project(20, "OLD", true)], []);
+
+    await assert.rejects(
+      () => new Resolver(client).checkProjectIdForTasks(20),
+      /is archived, and Vikunja does not list tasks of archived projects/,
+    );
+  });
+
+  it("accepts the id of a live project", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    assert.equal(await new Resolver(client).checkProjectIdForTasks(11), 11);
+  });
+
+  it("accepts the id of a project with no key, which is what the id hatch is for", async () => {
+    // The key map skips these; the id map must not, or the check would refuse exactly the
+    // projects the escape hatch exists to reach.
+    const client = stubClient([project(10, ""), ...PROJECTS], TASKS);
+
+    assert.equal(await new Resolver(client).checkProjectIdForTasks(10), 10);
+  });
+
+  it("refuses an id that names no project rather than letting it answer empty", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    await assert.rejects(
+      () => new Resolver(client).checkProjectIdForTasks(999),
+      /No project has id 999/,
+    );
+  });
+
+  it("reloads for an unknown id, picking up a project created since", async () => {
+    const projects = [...PROJECTS];
+    const client = stubClient(projects, TASKS);
+    const resolver = new Resolver(client, ALWAYS_RELOAD);
+
+    await resolver.resolveProjectKey("INFRA");
+    projects.push(project(12, "NEW"));
+
+    assert.equal(await resolver.checkProjectIdForTasks(12), 12);
+    assert.equal(client.calls.listProjects, 2);
   });
 
   it("errors instead of returning another task when the server ignores the index term", async () => {
