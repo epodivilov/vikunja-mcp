@@ -87,12 +87,21 @@ primary reason this project exists.
 - A task has both `id` (global PK) and `index` (per-project sequence). The key is
   `<project.identifier>-<index>`, e.g. `INFRA-41`. An empty project identifier renders the key
   as `#<index>`.
-- There is no "get by key" endpoint. Resolve: project by identifier -> `GET /projects/{id}/tasks`
-  (paginated) -> match `index` -> global id. Cache the project -> identifier map.
+- A task also carries a ready-made `identifier` (`"VMCP-2"`), so the key does not have to be
+  assembled from the project — but it is empty when the project has no identifier, so the
+  `<identifier>-<index>` fallback still has to exist.
+- There is no "get by key" endpoint. Resolve: project by identifier -> `GET /tasks` with
+  `filter=project_id = <id>` (paginated) -> match `index` -> global id. Cache the project ->
+  identifier map. Do NOT use `GET /projects/{id}/tasks`: it still answers, but v2.3.0 documents
+  only `PUT` on that path. Do NOT use `GET /projects/{id}/views/{view}/tasks` either — it applies
+  the view's own filter (the default List view hides done tasks) and silently returns a subset.
 - Pagination headers: `x-pagination-total-pages`, `x-pagination-result-count`.
-  `max_items_per_page` is 1000.
-- Project update zeroes omitted numeric fields (e.g. `position`) — send the fields you intend
-  to keep.
+  `max_items_per_page` is 1000; a larger `per_page` is clamped without an error, so paging is
+  mandatory. An empty collection reports `x-pagination-total-pages: 0` — fetch page 1, then walk
+  up to the total.
+- `POST /tasks/{id}` is a genuine partial update: omitted fields are preserved. Project update
+  is the exception — it zeroes omitted numeric fields (e.g. `position`), so send the fields you
+  intend to keep.
 
 ## Checks
 
