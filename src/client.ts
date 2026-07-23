@@ -97,15 +97,23 @@ export class VikunjaHttpError extends Error {
 export interface ClientOptions {
   /** Items per request. Lower values exist to exercise pagination; production uses the default. */
   pageSize?: number;
+  /**
+   * The `fetch` every request goes through. Defaults to `globalThis.fetch`; injecting a stub is
+   * how the transport is tested without a live server. Only the seam — the "one host" rule still
+   * holds, since the URL is always built from `config.baseUrl`.
+   */
+  fetch?: typeof globalThis.fetch;
 }
 
 export class VikunjaClient {
   readonly #config: Config;
   readonly #pageSize: number;
+  readonly #fetch: typeof globalThis.fetch;
 
   constructor(config: Config, options: ClientOptions = {}) {
     this.#config = config;
     this.#pageSize = options.pageSize ?? PAGE_SIZE;
+    this.#fetch = options.fetch ?? globalThis.fetch;
   }
 
   // --- projects ---------------------------------------------------------------
@@ -267,7 +275,7 @@ export class VikunjaClient {
     let response: Response;
     let text: string;
     try {
-      response = await fetch(url, {
+      response = await this.#fetch(url, {
         method,
         headers: {
           Authorization: `Bearer ${this.#config.token}`,
