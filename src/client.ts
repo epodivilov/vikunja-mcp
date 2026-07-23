@@ -7,7 +7,15 @@
  * Keys, lean DTOs and markdown belong to the layers above.
  */
 import type { Config } from "./config.js";
-import type { RawComment, RawLabel, RawProject, RawTask, TaskWrite } from "./types.js";
+import type {
+  RawBucket,
+  RawComment,
+  RawLabel,
+  RawProject,
+  RawTask,
+  RawView,
+  TaskWrite,
+} from "./types.js";
 
 /**
  * An upper bound we ask for, not the page size we get. The server clamps `per_page` to its
@@ -204,6 +212,97 @@ export class VikunjaClient {
    */
   async addTaskLabel(taskId: number, labelId: number): Promise<void> {
     await this.#request<unknown>("PUT", `/tasks/${taskId}/labels`, { body: { label_id: labelId } });
+  }
+
+  // --- kanban board -----------------------------------------------------------
+
+  /**
+   * A project's views. The board tools read this to find the kanban view and its bucket mode.
+   * Few in practice, but routed through `#requestAll` like every other listing so a server that
+   * ever paginates it is still exhausted.
+   */
+  listViews(projectId: number): Promise<RawView[]> {
+    return this.#requestAll<RawView>(`/projects/${projectId}/views`);
+  }
+
+  /**
+   * The kanban board of one view: an array of buckets, each with its tasks embedded, in column
+   * order. This is the ONLY source of column membership — `GET /tasks` carries no view context
+   * and reports every task in bucket 0.
+   *
+   * Its pagination is unlike every other endpoint here, so it cannot go through `#requestAll`.
+   * `x-pagination-total-pages` is always 1 (it counts buckets, not tasks) and each bucket's own
+   * `count` can lag the set actually returned, so neither can end the loop. What `page` really
+   * does is slice the tasks *within* every bucket at once. The one server-agnostic signal that a
+   * board is exhausted — one that survives an instance clamping `per_page` below what we ask for,
+   * which would make a naive "did a bucket return a full page?" check truncate the column — is a
+   * page that adds no task to any column. So it walks pages, merging per bucket in first-seen
+   * order, until a page contributes nothing.
+   */
+  async readBoard(projectId: number, viewId: number): Promise<RawBucket[]> {
+    const path = `/projects/${projectId}/views/${viewId}/tasks`;
+    const order: { id: number; title: string }[] = [];
+    const tasksById = new Map<number, RawTask[]>();
+
+    for (let page = 1; ; page++) {
+      if (page > MAX_PAGES) {
+        throw new Error(
+          `Vikunja GET ${path} kept returning tasks past the ${MAX_PAGES} pages this client will walk. A single column is larger than any real board, or the server is ignoring pagination.`,
+        );
+      }
+
+      const response = await this.#requestPage<RawBucket>(path, {}, page);
+      let added = 0;
+
+      for (const bucket of response.data ?? []) {
+        let accumulated = tasksById.get(bucket.id);
+        if (accumulated === undefined) {
+          accumulated = [];
+          tasksById.set(bucket.id, accumulated);
+          order.push({ id: bucket.id, title: bucket.title });
+        }
+        const tasks = bucket.tasks ?? [];
+        accumulated.push(...tasks);
+        added += tasks.length;
+      }
+
+      // A page that added nothing to any column means every column is exhausted. On a board that
+      // fits one page this costs one extra request; a board read is not a hot path.
+      if (added === 0) {
+        break;
+      }
+    }
+
+    return order.map(({ id, title }) => ({ id, title, tasks: tasksById.get(id) ?? [] }));
+  }
+
+  /**
+   * The buckets of a manual kanban view, for mapping a column name to its id before a move. These
+   * are physical rows with `tasks: null`; the board is never read from here — the tasks are not
+   * embedded, and a filter view answers with stale rows unrelated to its columns. That is
+   * `readBoard`'s job.
+   */
+  listBuckets(projectId: number, viewId: number): Promise<RawBucket[]> {
+    return this.#requestAll<RawBucket>(`/projects/${projectId}/views/${viewId}/buckets`);
+  }
+
+  /**
+   * Moves a task into a bucket on a manual board. Vikunja writes `task_buckets`, enforces the
+   * bucket's WIP limit (erroring when it is full), and flips the task's `done` when it crosses the
+   * view's done bucket — all server-side, so the caller reads the task back to see the outcome
+   * rather than assuming it.
+   */
+  async moveTask(
+    projectId: number,
+    viewId: number,
+    bucketId: number,
+    taskId: number,
+  ): Promise<void> {
+    await this.#request<unknown>(
+      "POST",
+      `/projects/${projectId}/views/${viewId}/buckets/${bucketId}/tasks`,
+      { body: { task_id: taskId } },
+    );
   }
 
   // --- comments ---------------------------------------------------------------

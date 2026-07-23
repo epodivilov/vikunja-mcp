@@ -13,7 +13,7 @@ import {
   parseProjectKey,
   parseTaskRef,
 } from "../src/resolver.ts";
-import type { RawLabel, RawProject, RawTask } from "../src/types.ts";
+import type { RawBucket, RawLabel, RawProject, RawTask, RawView } from "../src/types.ts";
 
 function project(id: number, identifier: string, isArchived = false): RawProject {
   return { id, title: `Project ${id}`, identifier, description: "", is_archived: isArchived };
@@ -43,6 +43,10 @@ interface StubOptions {
   failOn?: number[];
   /** The instance's labels. Titles are not unique on a real server, and neither are these. */
   labels?: RawLabel[];
+  /** The project's views, for the kanban-view lookup. */
+  views?: RawView[];
+  /** A manual view's buckets, for the column-name lookup. */
+  buckets?: RawBucket[];
 }
 
 interface Stub extends ResolverClient {
@@ -59,6 +63,8 @@ function stubClient(projects: RawProject[], tasks: RawTask[], options: StubOptio
       calls.listLabels++;
       return options.labels ?? [];
     },
+    listViews: async () => options.views ?? [],
+    listBuckets: async () => options.buckets ?? [],
     listProjects: async () => {
       calls.listProjects++;
       if (failures > 0) {
@@ -449,5 +455,80 @@ describe("Resolver.resolveLabelIds", () => {
 
     assert.deepEqual(await new Resolver(client).resolveLabelIds([]), []);
     assert.equal(client.calls.listLabels, 0);
+  });
+});
+
+describe("Resolver.resolveKanbanView", () => {
+  function view(id: number, position: number, kind: string, mode: string): RawView {
+    return { id, position, view_kind: kind, bucket_configuration_mode: mode };
+  }
+
+  it("returns the first kanban view by position, with its mode", async () => {
+    const client = stubClient(PROJECTS, TASKS, {
+      views: [
+        view(43, 3, "table", "none"),
+        view(44, 4, "kanban", "filter"),
+        view(40, 1, "list", "none"),
+        view(45, 2, "kanban", "manual"),
+      ],
+    });
+
+    // 45 sits at position 2, ahead of 44 at position 4 — the first kanban by display order.
+    assert.deepEqual(await new Resolver(client).resolveKanbanView(11), { id: 45, mode: "manual" });
+  });
+
+  it("treats a mode that is not manual as filter, so a move refuses rather than guesses", async () => {
+    const client = stubClient(PROJECTS, TASKS, { views: [view(44, 1, "kanban", "filter")] });
+
+    assert.equal((await new Resolver(client).resolveKanbanView(11)).mode, "filter");
+  });
+
+  it("errors when the project has no kanban view", async () => {
+    const client = stubClient(PROJECTS, TASKS, {
+      views: [view(40, 1, "list", "none"), view(43, 2, "table", "none")],
+    });
+
+    await assert.rejects(() => new Resolver(client).resolveKanbanView(11), /no kanban view/);
+  });
+});
+
+describe("Resolver.resolveBucketId", () => {
+  function bucket(id: number, title: string): RawBucket {
+    return { id, title, tasks: null };
+  }
+
+  it("maps a column name to its bucket id, case-insensitively", async () => {
+    const client = stubClient(PROJECTS, TASKS, {
+      buckets: [bucket(7, "To-Do"), bucket(8, "Doing"), bucket(9, "Done")],
+    });
+
+    assert.equal(await new Resolver(client).resolveBucketId(3, 12, " doing "), 8);
+  });
+
+  it("lists the available columns when the name matches none", async () => {
+    const client = stubClient(PROJECTS, TASKS, {
+      buckets: [bucket(7, "To-Do"), bucket(9, "Done")],
+    });
+
+    await assert.rejects(
+      () => new Resolver(client).resolveBucketId(3, 12, "Doing"),
+      /no column named "Doing".*To-Do.*Done/s,
+    );
+  });
+
+  it("reports an ambiguous column rather than picking one, and never leaks a bucket id", async () => {
+    const client = stubClient(PROJECTS, TASKS, {
+      buckets: [bucket(8, "Doing"), bucket(10, "Doing")],
+    });
+
+    await assert.rejects(
+      () => new Resolver(client).resolveBucketId(3, 12, "Doing"),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /2 columns named "Doing"/);
+        assert.doesNotMatch(error.message, /\b8\b|\b10\b/);
+        return true;
+      },
+    );
   });
 });

@@ -7,10 +7,14 @@ import { Renderer, marked } from "marked";
 import TurndownService from "turndown";
 import { tables } from "turndown-plugin-gfm";
 import type {
+  BoardMode,
+  LeanBoard,
+  LeanColumn,
   LeanLabel,
   LeanProject,
   LeanTask,
   LeanTaskDetail,
+  RawBucket,
   RawLabel,
   RawProject,
   RawTask,
@@ -162,6 +166,21 @@ export function toLeanTask(raw: RawTask): LeanTask {
   }
 
   return task;
+}
+
+/**
+ * One raw bucket -> a lean column: the bucket's title becomes the column name, its embedded
+ * tasks become lean rows. The bucket id — a DB PK on a manual board, a meaningless array index
+ * on a filter one — is dropped, so it never reaches the model. A bucket read from the plain
+ * buckets listing (`tasks: null`) projects to an empty column.
+ */
+export function toLeanColumn(raw: RawBucket): LeanColumn {
+  return { name: raw.title, tasks: (raw.tasks ?? []).map(toLeanTask) };
+}
+
+/** A whole board: the mode, plus every bucket projected to a column in the server's order. */
+export function toLeanBoard(mode: BoardMode, buckets: readonly RawBucket[]): LeanBoard {
+  return { mode, columns: buckets.map(toLeanColumn) };
 }
 
 /**

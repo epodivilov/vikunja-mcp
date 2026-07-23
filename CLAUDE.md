@@ -56,10 +56,12 @@ primary reason this project exists.
 | `vikunja_list_tasks` | read | filters: project, done, search; lean rows |
 | `vikunja_get_task` | read | input: key (`INFRA-41`) or `{ id }` |
 | `vikunja_list_labels` | read | for label mapping |
+| `vikunja_get_board` | read | project's kanban board as ordered columns of lean tasks + mode; reads the per-view kanban endpoint, both board modes |
 | `vikunja_create_task` | write | markdown description accepted |
 | `vikunja_update_task` | write | partial fields incl. `done` |
 | `vikunja_complete_task` | write | convenience over update |
 | `vikunja_comment_task` | write | |
+| `vikunja_move_task` | write | move a task into a named column; manual-bucket boards only, refuses on filter boards |
 | `vikunja_delete_task` | write | isolated so it can be denied on its own |
 
 ## Invariants
