@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { VikunjaClient } from "./client.js";
+import { VikunjaClient, resolvePageSize } from "./client.js";
 import { loadConfig } from "./config.js";
 import { Resolver } from "./resolver.js";
 import { registerCommentTaskTool } from "./tools/comment-task.js";
@@ -16,7 +16,13 @@ import { registerUpdateTaskTool } from "./tools/update-task.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const client = new VikunjaClient(config);
+  // Discover the instance's page size from GET /info instead of guessing. index.ts owns the
+  // one stderr sink, so the network layer stays free of `process`: resolvePageSize signals a
+  // fallback through this callback rather than writing to stderr itself.
+  const pageSize = await resolvePageSize(config, {
+    warn: (message) => process.stderr.write(`vikunja-mcp: ${message}\n`),
+  });
+  const client = new VikunjaClient(config, { pageSize });
   const resolver = new Resolver(client);
 
   const server = new McpServer({

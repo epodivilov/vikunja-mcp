@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { describe, it } from "node:test";
-import { VikunjaClient, VikunjaHttpError } from "../src/client.ts";
+import { VikunjaClient, VikunjaHttpError, resolvePageSize } from "../src/client.ts";
 import type { Config } from "../src/config.ts";
 import type { RawTask } from "../src/types.ts";
 
@@ -56,6 +56,14 @@ function page(items: unknown[], totalPages?: number): Response {
     headers["x-pagination-total-pages"] = String(totalPages);
   }
   return new Response(JSON.stringify(items), { status: 200, headers });
+}
+
+/** A 200 response carrying a bare JSON object — the shape `GET /info` answers with. */
+function jsonObject(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 /** The `filter` query parameter of the one request that was made, decoded. */
@@ -366,5 +374,94 @@ describe("client transport: read-modify-write", () => {
     assert.equal(body.priority, current.priority, "priority preserved");
     assert.equal(body.due_date, current.due_date, "due_date preserved");
     assert.equal(body.title, current.title, "title preserved");
+  });
+});
+
+describe("client transport: page-size discovery", () => {
+  /** The decoded `per_page` of the first request that hit the list endpoint. */
+  function perPageOf(calls: StubCall[]): string | null {
+    const listCall = calls.find((call) => call.url.includes("/projects"));
+    assert.ok(listCall, "a list request was made");
+    return new URL(listCall.url).searchParams.get("per_page");
+  }
+
+  it("R1: reads max_items_per_page from /info and sends it as per_page", async () => {
+    const { fetch, calls } = stubFetch((call) =>
+      call.url.includes("/info") ? jsonObject({ max_items_per_page: 50 }) : page([], 1),
+    );
+
+    const pageSize = await resolvePageSize(config, { fetch });
+    await new VikunjaClient(config, { fetch, pageSize }).listProjects();
+
+    const infoCalls = calls.filter((call) => call.url.includes("/info"));
+    assert.equal(infoCalls.length, 1, "/info was requested exactly once");
+    assert.equal(perPageOf(calls), "50");
+  });
+
+  const fallbackCases: Array<{ name: string; info: () => Response }> = [
+    {
+      name: "a rejected connection",
+      info: () => {
+        throw new Error("ECONNREFUSED");
+      },
+    },
+    { name: "a non-2xx answer", info: () => new Response("boom", { status: 500 }) },
+    {
+      name: "a non-JSON body",
+      info: () =>
+        new Response("<html>not json</html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+    },
+    { name: "an absent field", info: () => jsonObject({ version: "0.24.0" }) },
+    { name: "a zero field", info: () => jsonObject({ max_items_per_page: 0 }) },
+    { name: "a negative field", info: () => jsonObject({ max_items_per_page: -50 }) },
+    { name: "a non-integer field", info: () => jsonObject({ max_items_per_page: 12.5 }) },
+    { name: "a non-number field", info: () => jsonObject({ max_items_per_page: "50" }) },
+  ];
+
+  for (const { name, info } of fallbackCases) {
+    it(`R2: falls back to the default page size on ${name}`, async () => {
+      const { fetch, calls } = stubFetch((call) =>
+        call.url.includes("/info") ? info() : page([], 1),
+      );
+
+      const pageSize = await resolvePageSize(config, { fetch });
+      assert.equal(pageSize, 1000, "discovery fell back to the default");
+
+      await new VikunjaClient(config, { fetch, pageSize }).listProjects();
+      assert.equal(perPageOf(calls), "1000");
+    });
+  }
+
+  it("R3: an explicit page size is used verbatim and /info is never requested", async () => {
+    const { fetch, calls } = stubFetch((call) =>
+      call.url.includes("/info") ? jsonObject({ max_items_per_page: 50 }) : page([], 1),
+    );
+
+    await new VikunjaClient(config, { fetch, pageSize: 5 }).listProjects();
+
+    const infoCalls = calls.filter((call) => call.url.includes("/info"));
+    assert.equal(infoCalls.length, 0, "/info was not requested");
+    assert.equal(perPageOf(calls), "5");
+  });
+
+  it("R4: emits exactly one fallback diagnostic naming the default page size", async () => {
+    const { fetch } = stubFetch((call) =>
+      call.url.includes("/info") ? new Response("", { status: 500 }) : page([], 1),
+    );
+
+    const lines: string[] = [];
+    const pageSize = await resolvePageSize(config, {
+      fetch,
+      warn: (message) => lines.push(message),
+    });
+
+    assert.equal(pageSize, 1000);
+    assert.equal(lines.length, 1, "exactly one diagnostic line");
+    const [line] = lines;
+    assert.ok(line);
+    assert.match(line, /1000/);
   });
 });
