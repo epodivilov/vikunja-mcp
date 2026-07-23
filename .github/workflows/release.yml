@@ -1,0 +1,55 @@
+name: Release
+
+# `push: main` is the release trigger. changesets/action reads the tree that just landed:
+# while changesets are pending it opens/updates a "Version Packages" PR; once that PR is
+# merged (no changesets left) it publishes to npm and cuts the GitHub Release.
+on:
+  push:
+    branches: [main]
+
+# Serialize releases; never cancel a publish mid-flight. A cancelled `npm publish` can leave
+# a version half-registered, so we let an in-flight run finish rather than pre-empt it.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create tags + GitHub Releases
+  pull-requests: write # open/update the "Version Packages" PR
+  id-token: write # OIDC token for npm trusted publishing (no stored NPM_TOKEN)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # changesets needs full history to compute the version bump
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          # Writes the .npmrc that `npm publish` reads. Under OIDC the registry mints a
+          # short-lived token itself, so no NODE_AUTH_TOKEN is set here.
+          registry-url: "https://registry.npmjs.org"
+
+      # OIDC trusted publishing needs npm >= 11.5.1; the runner's bundled npm is older. This
+      # upgrade is the whole reason a token isn't needed. Provenance attaches automatically on
+      # a public repo and is silently skipped while the repo is private -- do NOT force it with
+      # NPM_CONFIG_PROVENANCE, which errors on a private repo.
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      # Pending changesets on main -> `changeset version` opens/updates the "Version Packages"
+      # PR. None left (that PR merged) -> `changeset publish` runs `npm publish` (whose
+      # prepublishOnly re-checks and builds) and, with createGithubReleases, cuts the Release.
+      - uses: changesets/action@v1
+        with:
+          version: npx changeset version
+          publish: npx changeset publish
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
