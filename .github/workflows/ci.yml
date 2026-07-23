@@ -50,3 +50,15 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run lint
+
+      # Every PR must ship a changeset (use `changeset add --empty` for release-irrelevant
+      # work). `--since` diffs against origin/main, but a shallow-ish checkout may not have that
+      # ref under a name changeset understands, so fetch it explicitly first. Skipped on the
+      # `changeset-release/main` branch: changesets/action's own "Version Packages" PR consumes
+      # changesets rather than adding them, so the gate would always fail there.
+      - name: Fetch origin/main for the changeset diff base
+        if: github.head_ref != 'changeset-release/main'
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      - name: Require a changeset
+        if: github.head_ref != 'changeset-release/main'
+        run: npx changeset status --since=origin/main

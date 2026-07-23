@@ -166,6 +166,27 @@ collapse the whole key-resolution dance below into one request.)
   `position`) are zeroed — but an omitted `description` is preserved. Send the fields you intend
   to keep.
 
+## Releasing
+
+Versioning and publishing are driven by [Changesets](https://github.com/changesets/changesets).
+
+- **Every PR ships a changeset.** Run `npx changeset add`, pick the bump (patch/minor/major),
+  and write a changelog line. CI enforces this: the `check` job runs
+  `changeset status --since=origin/main` and fails a PR that changes the package without one.
+- **`--empty` is the escape hatch.** For release-irrelevant work (CI, docs, chore, tooling) that
+  still touches tracked files, run `npx changeset add --empty` — it records "no version bump" and
+  satisfies the gate without inventing a changelog entry.
+- **`main` is continuously mergeable; releasing is a separate, deliberate act.** On push to
+  `main`, `.github/workflows/release.yml` runs `changesets/action`: while changesets are pending
+  it opens/updates a "Version Packages" PR (the accumulated bump + changelog). Merging *that* PR
+  is what publishes to npm and cuts the GitHub Release.
+- **Publishing uses npm OIDC trusted publishing — no stored `NPM_TOKEN`.** The workflow declares
+  `id-token: write` and upgrades to npm ≥ 11.5.1; the registry mints a short-lived token from the
+  OIDC claim. Provenance attaches automatically once the repo is public and is silently skipped
+  while it is private — do not force it with `NPM_CONFIG_PROVENANCE`, which errors on a private
+  repo. The very first publish of the scoped package must be bootstrapped manually before a
+  trusted publisher can be attached (npm requires the package to already exist).
+
 ## Checks
 
 ```
