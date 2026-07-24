@@ -26,8 +26,9 @@ export function registerGetBoardTool(
         "Reads a project's kanban board as an ordered list of columns, each with its tasks as " +
         "lean rows, plus the board mode. On a `manual` board the columns are hand-managed buckets " +
         "a task can be moved between with vikunja_move_task; on a `filter` board they are defined " +
-        "by filters, so a task moves between them by changing the fields those filters test (e.g. " +
-        "its labels), not by a board move. Address the project by key (e.g. INFRA); `projectId` is " +
+        "by filters, so a task moves between them by changing the fields those filters test — most " +
+        "often its labels, via vikunja_label_task — not by a board move. Address the project by " +
+        "key (e.g. INFRA); `projectId` is " +
         "the escape hatch for a project with no key. A project with no kanban view has no board and " +
         "is an error, not an empty result.",
       inputSchema: {

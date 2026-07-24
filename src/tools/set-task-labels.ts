@@ -46,10 +46,11 @@ export function registerSetTaskLabelsTool(
             "The complete set of labels the task should end up with, each named by title or by the id vikunja_list_labels reports. Anything currently on the task and absent here is detached; an empty array leaves the task with no labels.",
           ),
       }),
-      // destructiveHint is left at its default of true, and that is the honest reading: this call
-      // detaches every label it does not name, and `[]` detaches all of them. A client that gates
-      // destructive tools should gate this one and still be free to allow vikunja_label_task.
-      annotations: { idempotentHint: true },
+      // Destructive, and said out loud rather than left to the SDK's default: this call detaches
+      // every label it does not name, and `[]` detaches all of them. vikunja_label_task cannot do
+      // that — it only touches the labels it names — which is why its hint is false and this one's
+      // is true, and why a client can gate this tool while allowing that one.
+      annotations: { destructiveHint: true, idempotentHint: true },
     },
     async ({ task, id, labels }) => {
       const target = await resolveTaskTarget(client, resolver, { task, id });

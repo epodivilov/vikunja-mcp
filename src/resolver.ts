@@ -368,6 +368,16 @@ export class Resolver {
    * would write the set back unchanged and report success for a change nobody made), and one
    * naming the same label on both sides (the formula would silently let `remove` win, and the
    * caller cannot have meant both).
+   *
+   * That second refusal is checked twice, deliberately. The references are compared **as
+   * written** first, which catches the mistake whatever the task currently carries — the same id,
+   * or the same title, on both sides is wrong on its face. It has to be checked there, because
+   * the resolved comparison below cannot see it: `removeIds` holds only labels the task already
+   * has, so a collision over a label it does not have would slip through and *attach* the very
+   * label the caller asked to remove. It would also make the refusal depend on prior state — the
+   * same call succeeding once and failing the next time — which is exactly what the tool's
+   * `idempotentHint` promises it will not do. The resolved check then stays for the collision the
+   * written one cannot see: one label named by its title on one side and by its id on the other.
    */
   async resolveLabelChange(current: readonly RawLabel[], change: LabelChange): Promise<number[]> {
     const add = change.add ?? [];
@@ -379,15 +389,18 @@ export class Resolver {
       );
     }
 
+    const written = refsInBoth(add, remove);
+
+    if (written.length > 0) {
+      throw namedInBothError(written.map(describeRef).join(", "));
+    }
+
     const addIds = await this.resolveLabelIds(add);
     const removeIds = labelsOnTask(current, remove);
     const both = addIds.filter((id) => removeIds.includes(id));
 
     if (both.length > 0) {
-      const named = both.map((id) => `"${titleOf(current, id)}" (id ${id})`).join(", ");
-      throw new Error(
-        `${named} named in both add and remove, so it is not clear whether the task should end up carrying it. Name it in one of them.`,
-      );
+      throw namedInBothError(both.map((id) => `"${titleOf(current, id)}" (id ${id})`).join(", "));
     }
 
     const next = new Set(current.map((label) => label.id));
@@ -631,6 +644,52 @@ function labelsOnTask(current: readonly RawLabel[], refs: readonly LabelRef[]): 
 /** The title of a label the task carries. Only ever called for an id taken from that same set. */
 function titleOf(current: readonly RawLabel[], id: number): string {
   return current.find((label) => label.id === id)?.title ?? String(id);
+}
+
+/**
+ * The references `add` and `remove` both name, compared as the caller wrote them: a title against
+ * a title (trimmed, case-insensitively, the way every other title match here works) and an id
+ * against an id. No listing is needed to see this collision, which is why it is checked first —
+ * and it is the only check that sees one over a label the task does not currently carry.
+ *
+ * A title and a number never compare equal here, even when they name the same label; that
+ * collision is the resolved check's to catch, once there are ids on both sides to compare.
+ */
+function refsInBoth(add: readonly LabelRef[], remove: readonly LabelRef[]): LabelRef[] {
+  const removed = new Set(remove.map(normaliseRef));
+  const reported = new Set<string | number>();
+  const both: LabelRef[] = [];
+
+  for (const ref of add) {
+    const key = normaliseRef(ref);
+
+    if (removed.has(key) && !reported.has(key)) {
+      reported.add(key);
+      both.push(ref);
+    }
+  }
+
+  return both;
+}
+
+/** A reference as a comparable key. Numbers stay numbers, so `5` never matches the title "5". */
+function normaliseRef(ref: LabelRef): string | number {
+  return typeof ref === "number" ? ref : ref.trim().toLowerCase();
+}
+
+/** A reference echoed back to the caller in the words they used. */
+function describeRef(ref: LabelRef): string {
+  return typeof ref === "number" ? `the label with id ${ref}` : `"${ref}"`;
+}
+
+/**
+ * The one sentence both collision checks tell, so a caller cannot get two different stories about
+ * the same mistake depending on which of them noticed it.
+ */
+function namedInBothError(named: string): Error {
+  return new Error(
+    `Named in both add and remove: ${named}. A label cannot be added and removed in the same call, and which one wins is not something to guess at — name it on one side only.`,
+  );
 }
 
 function labelById(known: readonly RawLabel[], id: number): number {

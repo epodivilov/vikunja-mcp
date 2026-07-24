@@ -543,8 +543,65 @@ describe("Resolver.resolveLabelChange", () => {
   });
 
   it("refuses a label named in both add and remove instead of picking an order", async () => {
+    // Named two different ways — a title on one side, its id on the other — so the collision only
+    // becomes visible once both sides are resolved.
     await assert.rejects(
       () => changeResolver().resolveLabelChange(CURRENT, { add: ["specified"], remove: [45] }),
+      /both add and remove/,
+    );
+  });
+
+  it("refuses the same title on both sides even when the task does not carry it", async () => {
+    // The refusal must not depend on what the task happens to hold. Detecting the collision only
+    // after matching the removal against `current` let this call through — attaching the very
+    // label it was told to remove — and then throw on an identical second call, the opposite of
+    // the idempotence the tool advertises.
+    await assert.rejects(
+      () =>
+        changeResolver().resolveLabelChange(CURRENT, {
+          add: ["in-progress"],
+          remove: ["in-progress"],
+        }),
+      /both add and remove/,
+    );
+  });
+
+  it("refuses the same label id on both sides even when the task does not carry it", async () => {
+    await assert.rejects(
+      () => changeResolver().resolveLabelChange(CURRENT, { add: [46], remove: [46] }),
+      /both add and remove/,
+    );
+  });
+
+  it("compares the sides as the titles are written, ignoring case and surrounding space", async () => {
+    await assert.rejects(
+      () =>
+        changeResolver().resolveLabelChange(CURRENT, {
+          add: ["In-Progress"],
+          remove: [" in-progress "],
+        }),
+      /both add and remove/,
+    );
+  });
+
+  it("reports a collision before resolving anything, so nothing is read for it", async () => {
+    const client = stubClient(PROJECTS, TASKS, { labels: LABELS });
+
+    await assert.rejects(
+      () => new Resolver(client).resolveLabelChange(CURRENT, { add: ["nope"], remove: ["NOPE"] }),
+      /both add and remove/,
+      "the collision is what is reported, not the unknown label it would have resolved to",
+    );
+    assert.equal(client.calls.listLabels, 0);
+  });
+
+  it("answers a collision the same way whether or not the task carries the label", async () => {
+    const resolver = changeResolver();
+    const change = { add: ["specified"], remove: ["specified"] };
+
+    await assert.rejects(() => resolver.resolveLabelChange(CURRENT, change), /both add and remove/);
+    await assert.rejects(
+      () => resolver.resolveLabelChange([{ id: 5, title: "feature" }], change),
       /both add and remove/,
     );
   });
