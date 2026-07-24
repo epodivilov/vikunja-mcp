@@ -688,11 +688,14 @@ describe("client transport: task relations", () => {
   });
 
   it("R4: surfaces Vikunja's refusal with its status and code rather than reporting success", async () => {
-    // 4004 is "cannot relate a task to itself"; an existing relation (4001) and a cycle (4005)
-    // arrive the same way. None of them may be swallowed.
+    // 4010 is ErrCodeRelationTasksCannotBeTheSame; an already-existing relation (4008) and a
+    // subtask cycle (4023) arrive the same way, and none of them may be swallowed. The numbers
+    // are read off `error.go` at v2.3.0 rather than guessed: the neighbouring 400x codes belong
+    // to unrelated task errors, so a fixture carrying a plausible-looking wrong one would teach
+    // the next reader a pairing that does not exist.
     const { fetch } = stubFetch(
       () =>
-        new Response(JSON.stringify({ code: 4004, message: "cannot relate a task to itself" }), {
+        new Response(JSON.stringify({ code: 4010, message: "cannot relate a task to itself" }), {
           status: 400,
           headers: { "content-type": "application/json" },
         }),
@@ -703,7 +706,7 @@ describe("client transport: task relations", () => {
       (error: unknown) => {
         assert.ok(error instanceof VikunjaHttpError);
         assert.equal(error.status, 400);
-        assert.equal(error.code, 4004);
+        assert.equal(error.code, 4010);
         assert.match(error.message, /cannot relate a task to itself/);
         return true;
       },

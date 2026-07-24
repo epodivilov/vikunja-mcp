@@ -252,9 +252,17 @@ collapse the whole key-resolution dance below into one request.)
 - **Relations are one write, both directions.** `PUT /tasks/{id}/relations` with
   `{ other_task_id, relation_kind }` inserts `(t, o, kind)` *and* `(o, t, inverse(kind))` in the
   same call (`task_relation.go`), so never issue a second write for the inverse — it would earn
-  the "relation already exists" refusal (code 4001). `DELETE
+  the "relation already exists" refusal (code 4008). `DELETE
   /tasks/{id}/relations/{kind}/{other}` likewise removes both rows. The kind and the other task
   travel in the DELETE path; the PUT body is snake_case.
+- **Relation error codes, read off `error.go` at v2.3.0** — check them there before branching on
+  one, because the 400x range is shared with task errors that have nothing to do with relations,
+  and an off-by-a-few code silently names a different failure: `4007`
+  `ErrCodeInvalidRelationKind`, `4008` `ErrCodeRelationAlreadyExists`, `4009`
+  `ErrCodeRelationDoesNotExist` (what unrelating a relation that is not there produces), `4010`
+  `ErrCodeRelationTasksCannotBeTheSame`, `4023` `ErrCodeTaskRelationCycle`. For contrast, the
+  neighbours a plausible guess lands on: `4001` is `ErrCodeTaskCannotBeEmpty`, `4004`
+  `ErrCodeBulkTasksNeedAtLeastOne`, `4005` `ErrCodeNoRightToSeeTask`.
 - The kind vocabulary is 11 strings — `subtask`/`parenttask`, `blocking`/`blocked`,
   `precedes`/`follows`, `duplicateof`/`duplicates`, `copiedfrom`/`copiedto`, `related` — paired
   as their own inverses. `unknown` exists as a Go constant but `RelationKind.isValid()` rejects
@@ -268,9 +276,15 @@ collapse the whole key-resolution dance below into one request.)
 - **Embedded related tasks have an empty `identifier`.** `setIdentifier` runs on the task being
   read and never on the rows inside `related_tasks` (`otherTask` is `copier.Copy`'d), so a
   related task's key must be rebuilt from its `index` plus *its own* project's identifier — it
-  may live in another project, archived included. That read path never touches `GET /tasks`, so
-  the archive blindness that affects listings does not apply; `resolver.taskRefLookup` answers
-  from the project index, which lists archived projects.
+  may live in another project, archived included. The identifier for that comes from
+  `resolver.taskRefLookup`, which answers out of the `GET /projects` index and therefore knows
+  archived projects too: the archive blindness of `GET /tasks` constrains which *named* task can
+  be resolved by key, not which project a related task's key can be built from.
+- **Both read paths embed relations**, so the key path is not the poor relation of the id one.
+  `GET /tasks/{id}` populates `related_tasks`, and so does the `GET /tasks` collection that
+  `resolver.resolveTask` resolves a key through (`ReadAll` -> `getTasksForProjects` ->
+  `addMoreInfoToTasks` -> `addRelatedTasksToTasks`; `tasks.go` initializes the map, so a
+  collection row carries at least `{}`).
 - `related_tasks` empty comes in three shapes: absent, `null` (a nil Go map) and `{}`. It is also
   `xorm:"-"`, hence ignored on writes — which is why the read-modify-write in `client.updateTask`
   can spread it into the update body harmlessly. Relations must never be sent through a task
@@ -309,13 +323,19 @@ them. They run through `node --test` on the TypeScript directly, so **developmen
 22.6+** even though the shipped code still supports the `engines` floor of 20. `tsc` does not
 typecheck `test/` (`include: ["src"]`); Biome still lints it.
 
-Running the TypeScript directly has one consequence worth knowing before moving code: the
-type-stripping loader does not resolve a `.js` specifier to a `.ts` file. A `src` module that
-imports another one's **value** therefore cannot be loaded by a test — and neither can any test
-that imports it, transitively. That is why `src/tools/*` is untestable (every tool imports
-`projection`/`result` for real) while `client`, `resolver`, `projection` and `types` are not:
-they import each other for types only. A shared runtime constant belongs in `types.ts`, which
+Running the TypeScript directly, **combined with this repo's `.js`-specifier import convention**,
+has one consequence worth knowing before moving code: the type-stripping loader does not resolve
+`./projection.js` to `projection.ts`, so a `src` module that imports another one's **value**
+cannot be loaded by a test — and neither can any test that imports it, transitively. That is why
+`src/tools/*` is untestable (every tool imports `projection`/`result` for real) while `client`,
+`resolver`, `projection` and `types` are not: they import each other for types only, and a type
+import is erased. Until that changes, a shared runtime constant belongs in `types.ts`, which
 nothing imports for values.
+
+It is a convention, not a law: TypeScript's `rewriteRelativeImportExtensions` (5.7+, and 5.9 is
+what is installed) would let `src` import by `.ts` specifier and still emit `.js`, which would
+make the tool files importable and testable. That is a repo-wide change and belongs to its own
+task — do not do it as a side effect of something else.
 
 `projection.ts` is pure, so its edge cases are cheap to pin. Anything learned about the live
 server's actual shapes belongs in `test/projection.test.ts` as a case, not in a commit message.

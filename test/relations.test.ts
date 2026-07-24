@@ -367,11 +367,11 @@ describe("relate_tasks data path", () => {
 
   it("R4: a refusal from the server surfaces as an error, not as a success", async () => {
     const layers = stack();
-    // The task is related to itself, which Vikunja refuses with code 4004. The stub answers the
-    // way the server does; the point is that nothing here swallows it.
+    // The task is related to itself, which Vikunja refuses with 4010 (`error.go`, v2.3.0). The
+    // stub answers the way the server does; the point is that nothing here swallows it.
     const refusing = new VikunjaClient(config, {
       fetch: (async () =>
-        new Response(JSON.stringify({ code: 4004, message: "cannot relate a task to itself" }), {
+        new Response(JSON.stringify({ code: 4010, message: "cannot relate a task to itself" }), {
           status: 400,
           headers: { "content-type": "application/json" },
         })) as typeof globalThis.fetch,
@@ -494,7 +494,10 @@ describe("relation kinds", () => {
     assert.throws(() => parseRelationKind("   "), /kind/);
   });
 
-  it("R2: takes the vocabulary as the UI spells it, whatever case it arrives in", () => {
+  it("R2: normalises case and space — a guard property, not a tool one", () => {
+    // Only about this function. Over MCP the tools declare `kind` as a zod enum and the SDK
+    // rejects "Blocking" before a handler runs, so this leniency is what any other caller of
+    // the guard gets, and is not evidence that the tools accept a title-cased kind.
     const kinds: RelationKind[] = [parseRelationKind(" Blocking "), parseRelationKind("SUBTASK")];
     assert.deepEqual(kinds, ["blocking", "subtask"]);
   });

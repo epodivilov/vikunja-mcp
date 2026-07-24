@@ -105,9 +105,12 @@ export type RelationKind = (typeof RELATION_KINDS)[number];
  * before it is looked up: the caller's own word is what is wrong, and saying so beats a 400 that
  * names a Go constant. A made-up kind therefore costs no request at all.
  *
- * Case and surrounding space are forgiven because the UI labels these kinds in title case
- * ("Blocking") while the API takes them lower-case; refusing "Blocking" would be pedantry about
- * a spelling an agent read off a screen.
+ * In the two tools this is the inner of two gates, and the outer one is stricter: their schemas
+ * declare `kind` as a zod enum, and the MCP SDK validates against it before a handler runs — so
+ * over MCP a wrong kind is rejected there, and the trim/lower-case here is never what saves it.
+ * The enum stays because it is what publishes the vocabulary to a client; this stays because it
+ * is what any other caller gets, and because the refusal it writes names the eleven kinds in a
+ * sentence rather than in a schema violation.
  */
 export function parseRelationKind(input: string): RelationKind {
   const kind = input.trim().toLowerCase();
@@ -231,11 +234,13 @@ export interface RawTask {
    */
   assignees: RawUser[] | null;
   /**
-   * Related tasks, keyed by relation kind, as `GET /tasks/{id}` embeds them. Three shapes mean
-   * "none": absent (endpoints that do not populate it), `null` (a nil Go map) and `{}` (an empty
-   * one). The rows inside are whole tasks whose `identifier` is always `""` — `setIdentifier`
-   * runs on the task being read and never on these — so their keys have to be rebuilt from
-   * `index` and their own project.
+   * Related tasks, keyed by relation kind. Both read paths embed them: `GET /tasks/{id}`, and
+   * the `GET /tasks` collection a key resolves through (`addRelatedTasksToTasks`), which
+   * initializes the map and so sends at least `{}`. Three shapes mean "none": absent (an
+   * endpoint that does not populate it, such as a write response), `null` (a nil Go map) and
+   * `{}` (an empty one). The rows inside are whole tasks whose `identifier` is always `""` —
+   * `setIdentifier` runs on the task being read and never on these — so their keys have to be
+   * rebuilt from `index` and their own project.
    */
   related_tasks?: Record<string, RawTask[] | null> | null;
 }
