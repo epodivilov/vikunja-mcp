@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { VikunjaClient, resolvePageSize } from "./client.js";
 import { loadConfig } from "./config.js";
 import { Resolver } from "./resolver.js";
+import { registerAssignTaskTool } from "./tools/assign-task.js";
 import { registerCommentTaskTool } from "./tools/comment-task.js";
 import { registerCompleteTaskTool } from "./tools/complete-task.js";
 import { registerCreateTaskTool } from "./tools/create-task.js";
@@ -12,10 +13,12 @@ import { registerGetBoardTool } from "./tools/get-board.js";
 import { registerGetTaskTool } from "./tools/get-task.js";
 import { registerLabelTaskTool } from "./tools/label-task.js";
 import { registerListLabelsTool } from "./tools/list-labels.js";
+import { registerListMembersTool } from "./tools/list-members.js";
 import { registerListProjectsTool } from "./tools/list-projects.js";
 import { registerListTasksTool } from "./tools/list-tasks.js";
 import { registerMoveTaskTool } from "./tools/move-task.js";
 import { registerSetTaskLabelsTool } from "./tools/set-task-labels.js";
+import { registerUnassignTaskTool } from "./tools/unassign-task.js";
 import { registerUpdateTaskTool } from "./tools/update-task.js";
 
 async function main(): Promise<void> {
@@ -44,6 +47,7 @@ async function main(): Promise<void> {
   registerGetTaskTool(server, client, resolver);
   registerListLabelsTool(server, client);
   registerGetBoardTool(server, client, resolver);
+  registerListMembersTool(server, client, resolver);
   //       See CLAUDE.md -> "Tool surface". Each tool lives in src/tools/*.
 
   // Write tools. One per operation, and never behind a shared `subcommand` argument: an MCP
@@ -55,6 +59,8 @@ async function main(): Promise<void> {
   registerMoveTaskTool(server, client, resolver);
   registerLabelTaskTool(server, client, resolver);
   registerSetTaskLabelsTool(server, client, resolver);
+  registerAssignTaskTool(server, client, resolver);
+  registerUnassignTaskTool(server, client, resolver);
   registerDeleteTaskTool(server, client, resolver);
 
   const transport = new StdioServerTransport();

@@ -29,6 +29,14 @@ export interface LeanTask {
   priority?: number;
   due?: string;
   labels: string[];
+  /**
+   * Usernames of the people this task is assigned to, omitted entirely when it has none.
+   *
+   * Usernames rather than ids, for the same reason tasks are addressed by key: the id is not what
+   * a human or an agent reads anywhere. Omitted rather than `[]` because most tasks in a listing
+   * carry no assignee, and an empty array on every row is pure token cost.
+   */
+  assignees?: string[];
 }
 
 /**
@@ -43,6 +51,20 @@ export interface LeanTaskDetail extends LeanTask {
 export interface LeanLabel {
   id: number;
   title: string;
+}
+
+/**
+ * A user as the agent names one: by username, with the global id as the escape hatch for the
+ * collision case. `name` is the display name, present only when the user has set one.
+ *
+ * No email — ever. The endpoint this is projected from blanks it out when no search term is
+ * passed, but that is the server's accident, not a guarantee; dropping the field here is what
+ * makes it one.
+ */
+export interface LeanUser {
+  id: number;
+  username: string;
+  name?: string;
 }
 
 /** Whether a kanban board's columns are hand-managed buckets or synthesized from per-column filters. */
@@ -84,6 +106,19 @@ export interface RawLabel {
   title: string;
 }
 
+/**
+ * A user as the API returns one, on a task's `assignees` and from the project-members listing.
+ *
+ * The server sends a good deal more — `email`, `created`, `updated` — and none of it is declared,
+ * so nothing above can read it by accident. `name` is the display name and is `""` when unset,
+ * like every other absent string Vikunja stores.
+ */
+export interface RawUser {
+  id: number;
+  username: string;
+  name: string;
+}
+
 export interface RawTask {
   id: number;
   title: string;
@@ -102,6 +137,12 @@ export interface RawTask {
    */
   identifier: string;
   labels: RawLabel[] | null;
+  /**
+   * Null when nobody is assigned, like `labels`. Declared because `client.updateTask` has to echo
+   * it back: `POST /tasks/{id}` replaces the assignee set wholesale from its payload, so an update
+   * that dropped this field would silently unassign everyone.
+   */
+  assignees: RawUser[] | null;
 }
 
 export interface RawComment {

@@ -8,6 +8,7 @@ import { toLeanTask, toTaskWrite } from "../projection.js";
 import type { Resolver } from "../resolver.js";
 import { jsonResult } from "./result.js";
 import { dueField, priorityField } from "./task-fields.js";
+import { usersField } from "./user-fields.js";
 
 export function registerCreateTaskTool(
   server: McpServer,
@@ -21,9 +22,9 @@ export function registerCreateTaskTool(
       description:
         "Create a task in a project. Answers with the new task's key, which is how every other tool addresses it.",
       // Strict: an argument this schema does not declare is an error rather than a silent
-      // drop. `labels` on an update, `assignees` here, a misspelled field — a non-strict schema
-      // answers all of them with a cheerful success and no change, which is the worst answer
-      // available. The strictness also reaches the client as `additionalProperties: false`.
+      // drop. `labels` on an update, a misspelled field — a non-strict schema answers both with a
+      // cheerful success and no change, which is the worst answer available. The strictness also
+      // reaches the client as `additionalProperties: false`.
       inputSchema: z.strictObject({
         project: z
           .string()
@@ -56,18 +57,30 @@ export function registerCreateTaskTool(
           .describe(
             "Existing labels, each named by title or by the id vikunja_list_labels reports. Labels are never created here; an unknown one is an error. Pass an id when a title turns out to be shared.",
           ),
+        assignees: usersField
+          .optional()
+          .describe(
+            "Users to assign the new task to, each by the username vikunja_list_members reports, or by global id. An unknown or ambiguous name is an error and no task is created.",
+          ),
       }),
       annotations: { destructiveHint: false },
     },
-    async ({ project, projectId, title, description, priority, due, labels }) => {
+    async ({ project, projectId, title, description, priority, due, labels, assignees }) => {
       const targetProject = await resolveProject(resolver, project, projectId);
-      // Resolved before the task exists: an unknown or ambiguous label then fails with nothing
-      // written, rather than leaving a task behind that is missing half its labels.
+      // Both resolved before the task exists: an unknown or ambiguous name then fails with nothing
+      // written, rather than leaving a task behind that is missing half its labels or assignees.
       const labelIds = labels === undefined ? [] : await resolver.resolveLabelIds(labels);
+      const assigneeIds =
+        assignees === undefined
+          ? []
+          : await resolver.resolveAssigneeIds(targetProject, [], assignees);
 
+      // Assignees ride along in the create, unlike labels: Vikunja writes them inside the task's
+      // own transaction and rolls that back on error, so a refused assignee leaves no task behind.
       const created = await client.createTask(
         targetProject,
         toTaskWrite({ title, description, priority, due }),
+        assigneeIds,
       );
 
       for (const labelId of labelIds) {
@@ -82,9 +95,10 @@ export function registerCreateTaskTool(
         }
       }
 
-      // Read back rather than project the create response: that response carries the `labels`
-      // array it was handed, which is neither what the server stored nor what the calls above
-      // just attached. A read is the only answer that describes the task as it now is.
+      // Read back rather than project the create response: that response carries the `labels` and
+      // `assignees` arrays it was handed — the assignees as bare `{ id }` objects with no username
+      // on them — which is neither what the server stored nor what the calls above just attached.
+      // A read is the only answer that describes the task as it now is.
       const task = await client.getTask(created.id);
 
       return jsonResult(toLeanTask(task));

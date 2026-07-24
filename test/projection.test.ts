@@ -16,9 +16,10 @@ import {
   toLeanProject,
   toLeanTask,
   toLeanTaskDetail,
+  toLeanUser,
   toTaskWrite,
 } from "../src/projection.ts";
-import type { RawProject, RawTask } from "../src/types.ts";
+import type { RawProject, RawTask, RawUser } from "../src/types.ts";
 
 /** A task as the API returns it with every optional value unset. */
 const bareTask: RawTask = {
@@ -32,6 +33,7 @@ const bareTask: RawTask = {
   priority: 0,
   due_date: "0001-01-01T00:00:00Z",
   labels: null,
+  assignees: null,
 };
 
 /** A project as the API returns it. `description` and `is_archived` never reach the model. */
@@ -115,6 +117,19 @@ describe("toLeanTask", () => {
     const raw = { ...bareTask, description: "<p>should not leak into a listing</p>" };
     assert.equal("description" in toLeanTask(raw), false);
   });
+
+  it("R6: flattens assignees to usernames, in the server's order", () => {
+    const assignees: RawUser[] = [
+      { id: 5, username: "bob", name: "" },
+      { id: 3, username: "alice", name: "Alice A" },
+    ];
+    assert.deepEqual(toLeanTask({ ...bareTask, assignees }).assignees, ["bob", "alice"]);
+  });
+
+  it("R6: omits assignees entirely when the task has none", () => {
+    assert.equal("assignees" in toLeanTask(bareTask), false, "null assignees");
+    assert.equal("assignees" in toLeanTask({ ...bareTask, assignees: [] }), false, "empty list");
+  });
 });
 
 describe("toLeanTaskDetail", () => {
@@ -162,6 +177,27 @@ describe("toLeanProject / toLeanLabel", () => {
 
   it("maps a label", () => {
     assert.deepEqual(toLeanLabel({ id: 5, title: "feature" }), { id: 5, title: "feature" });
+  });
+});
+
+describe("toLeanUser", () => {
+  it("R5: keeps id and username only, dropping the email the API sends", () => {
+    // Deliberately a variable rather than an inline literal: the extra field is what the server
+    // actually sends, and a projection that spread the raw object would leak it here.
+    const raw = { id: 3, username: "alice", name: "", email: "alice@example.com" };
+
+    assert.deepEqual(toLeanUser(raw), { id: 3, username: "alice" });
+  });
+
+  it("R5: keeps a display name when the user has one", () => {
+    const lean = toLeanUser({ id: 3, username: "alice", name: "Alice A" });
+
+    assert.deepEqual(lean, { id: 3, username: "alice", name: "Alice A" });
+  });
+
+  it("R5: omits a blank name rather than sending the empty string back", () => {
+    assert.equal("name" in toLeanUser({ id: 5, username: "bob", name: "" }), false);
+    assert.equal("name" in toLeanUser({ id: 5, username: "bob", name: "  " }), false);
   });
 });
 
