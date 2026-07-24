@@ -196,7 +196,13 @@ function stack(): Stack {
   return { client, resolver: new Resolver(client), calls };
 }
 
-/** The assign_task body: resolve the task, resolve the names, write only the diff, read back. */
+/**
+ * The assign_task body: resolve the task, resolve the names, write only the diff, read back.
+ *
+ * The writes go through `client.addTaskAssignees` rather than a loop written here, deliberately:
+ * what an interrupted run reports is the behaviour under test below, and it lives in that method
+ * — so this helper exercises the shipped code instead of restating it.
+ */
 async function assignTask(
   { client, resolver }: Stack,
   ref: string,
@@ -205,9 +211,7 @@ async function assignTask(
   const target = await resolver.resolveTask(ref);
   const ids = await resolver.resolveAssigneeIds(target.project_id, target.assignees ?? [], users);
 
-  for (const id of ids) {
-    await client.addTaskAssignee(target.id, id);
-  }
+  await client.addTaskAssignees(target.id, ids);
 
   return toLeanTask(await client.getTask(target.id));
 }
@@ -284,6 +288,36 @@ describe("assign_task data path", () => {
     const puts = assigneePuts(composed.calls);
     assert.equal(puts.length, 1, "the id was not gated locally — the request was issued");
     assert.deepEqual(puts[0]?.body, { user_id: 9 });
+  });
+
+  it("R1: a refusal mid-call reports what already landed, not a bare failure", async () => {
+    const composed = stack();
+
+    // Two users, one of whom the server will refuse — and it cannot be known in advance, since a
+    // user id is deliberately never gated on the member listing. bob's assignment lands first.
+    await assert.rejects(
+      () => assignTask(composed, "VMCP-3", ["bob", 9]),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /user 5/, "names the assignment that landed");
+        assert.match(error.message, /7003/, "the server's own refusal is still intact");
+        return true;
+      },
+    );
+
+    assert.deepEqual(
+      assigneePuts(composed.calls).map((call) => call.body),
+      [{ user_id: 5 }, { user_id: 9 }],
+      "the first write reached the server before the refusal",
+    );
+
+    // The half-application is real, which is exactly why the error has to admit to it: an agent
+    // told only "403" would either retry the whole call or report that nothing changed.
+    const task = await composed.client.getTask(600);
+    assert.deepEqual(
+      (task.assignees ?? []).map((user) => user.username),
+      ["alice", "bob"],
+    );
   });
 });
 

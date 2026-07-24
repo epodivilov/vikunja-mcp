@@ -292,6 +292,45 @@ export class VikunjaClient {
   }
 
   /**
+   * Assigns several users, one request each, and — this is the whole reason the loop lives here
+   * rather than in the tool — reports honestly when the run is cut short.
+   *
+   * There is no bulk endpoint that would make this atomic, and the refusal that stops it cannot be
+   * pre-empted: a user id is deliberately never gated against the project's member listing (that
+   * listing has a hole, and the access check is the server's), so a 403 arrives only once the
+   * request is out. By then earlier assignments have already been written and they stay written.
+   *
+   * Reporting that as a plain failure would leave the caller with a false picture — an agent would
+   * retry the whole call or tell its user nothing changed, while the task carries half of it. So a
+   * failure after something landed is rethrown naming exactly what landed, with the server's own
+   * message kept verbatim and the original error on `cause` for anyone who wants its status. A
+   * failure on the first write is passed through untouched: nothing landed, so there is nothing to
+   * add, and a partial-application note there would be its own kind of lie.
+   */
+  async addTaskAssignees(taskId: number, userIds: readonly number[]): Promise<void> {
+    const assigned: number[] = [];
+
+    for (const userId of userIds) {
+      try {
+        await this.addTaskAssignee(taskId, userId);
+      } catch (cause) {
+        if (assigned.length === 0) {
+          throw cause;
+        }
+
+        const landed = assigned.map((id) => `user ${id}`).join(", ");
+        const reason = cause instanceof Error ? cause.message : String(cause);
+        throw new Error(
+          `Assigned ${landed} to task ${taskId}, then Vikunja refused user ${userId} — so this call applied only part of what it named, and what it wrote stays written. Read the task to see who is assigned now. The refusal was: ${reason}`,
+          { cause },
+        );
+      }
+
+      assigned.push(userId);
+    }
+  }
+
+  /**
    * Unassigns one user from a task. The user is named by the path, so there is no body.
    *
    * The server does not check that the assignment existed — the handler is a bare delete — so this

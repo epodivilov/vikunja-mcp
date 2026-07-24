@@ -540,6 +540,67 @@ describe("client transport: assignees", () => {
     assert.equal(call.body, undefined, "the user is named by the path, so nothing is sent");
   });
 
+  it("R1: addTaskAssignees writes each user in turn, one request apiece", async () => {
+    const { fetch, calls } = stubFetch(() => new Response("", { status: 201 }));
+
+    await new VikunjaClient(config, { fetch }).addTaskAssignees(7, [3, 5]);
+
+    assert.deepEqual(
+      calls.map((call) => call.body),
+      [{ user_id: 3 }, { user_id: 5 }],
+    );
+  });
+
+  it("R1: a refusal after an earlier write landed names what is already assigned", async () => {
+    // The refusal cannot be pre-empted: a user id is deliberately not gated on the member
+    // listing, so the first anyone hears of it is the 403. What must not happen is reporting
+    // that as a plain failure — the earlier assignment is on the task and stays there.
+    const { fetch, calls } = stubFetch((call) => {
+      const { user_id: userId } = call.body as { user_id: number };
+      return userId === 9
+        ? new Response(JSON.stringify({ code: 7003, message: "You don't have the right" }), {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          })
+        : new Response("", { status: 201 });
+    });
+
+    await assert.rejects(
+      () => new VikunjaClient(config, { fetch }).addTaskAssignees(7, [5, 9]),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /user 5/, "names the assignment that landed");
+        assert.match(error.message, /7003/, "keeps the server's own refusal verbatim");
+        assert.ok(error.cause instanceof VikunjaHttpError, "the server's error stays reachable");
+        return true;
+      },
+    );
+
+    assert.equal(calls.length, 2, "stopped at the refusal rather than writing on");
+  });
+
+  it("R1: a refusal on the very first write is passed through untouched", async () => {
+    // Nothing landed, so there is nothing to add to the server's own message — and a
+    // half-application note on a call that applied nothing would be its own kind of lie.
+    const { fetch } = stubFetch(
+      () =>
+        new Response(JSON.stringify({ code: 7003, message: "You don't have the right" }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await assert.rejects(
+      () => new VikunjaClient(config, { fetch }).addTaskAssignees(7, [9]),
+      (error: unknown) => {
+        assert.ok(error instanceof VikunjaHttpError, "not reclassified into something else");
+        assert.equal(error.status, 403);
+        assert.doesNotMatch(error.message, /already assigned/, "no partial-application note");
+        return true;
+      },
+    );
+  });
+
   it("R5: reads an unpaginated projectusers response in a single request", async () => {
     // The real handler answers `c.JSON(200, users)` — a bare array with no x-pagination-*
     // headers at all, which `page()` reproduces by omitting the page count.

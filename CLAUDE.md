@@ -215,6 +215,15 @@ collapse the whole key-resolution dance below into one request.)
   assigned. So the "not assigned" refusal is **ours** to make — `resolver.resolveUnassigneeIds`
   — and the already-assigned skip is ours too, or a 4021 aborts a multi-user call halfway
   through with part of it applied.
+- **A multi-user assign is not atomic, and must say so.** There is no bulk endpoint (the one that
+  exists replaces the whole list and is not exposed), and a user id is deliberately never gated
+  locally, so a 7003 is knowable only from the response — by which time earlier users in the same
+  call are assigned and stay assigned. `client.addTaskAssignees` therefore names what landed in
+  the error it throws, keeping the server's message verbatim and the original error on `cause`. A
+  failure on the *first* write is passed through untouched: nothing landed, so a
+  partial-application note there would be false. Resolution still precedes every write, so an
+  unresolvable *name* changes nothing at all — the two guarantees are different and only one of
+  them is atomicity.
 - **`GET /projects/{id}/projectusers` is not paginated** (a plain `c.JSON(200, users)`, no
   `x-pagination-*`), and its membership set is wider than the project's direct shares: the owner,
   direct user shares, team shares, and everything inherited by walking up the parent chain. Its
