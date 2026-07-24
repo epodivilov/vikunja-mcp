@@ -45,6 +45,25 @@ export interface LeanLabel {
   title: string;
 }
 
+/** Whether a kanban board's columns are hand-managed buckets or synthesized from per-column filters. */
+export type BoardMode = "manual" | "filter";
+
+/** One kanban column: a name and the lean tasks currently under it. A bucket id never crosses here. */
+export interface LeanColumn {
+  name: string;
+  tasks: LeanTask[];
+}
+
+/**
+ * A project's kanban board, projected for the agent: the columns in the server's own order, each
+ * with its lean tasks, plus the mode that decides how a task moves — a bucket operation on a
+ * `manual` board, a change to the fields its column filters on a `filter` one.
+ */
+export interface LeanBoard {
+  mode: BoardMode;
+  columns: LeanColumn[];
+}
+
 /**
  * Raw Vikunja API shapes — internal to `client` and `projection`. Only the fields we
  * actually read are declared; the server sends a great deal more, and none of it may
@@ -90,6 +109,34 @@ export interface RawComment {
   /** HTML, like task descriptions. */
   comment: string;
   created: string;
+}
+
+/**
+ * A project view. Only the fields the board tools read are declared. On 2.3.0 both `view_kind`
+ * and `bucket_configuration_mode` are strings — `"kanban"`, `"manual"`/`"filter"`/`"none"` — not
+ * the integers an older reading of the API might expect.
+ */
+export interface RawView {
+  id: number;
+  /** Ascending display order; the first kanban view by position is the board. */
+  position: number;
+  /** "list" | "gantt" | "table" | "kanban". */
+  view_kind: string;
+  /** "none" on a non-kanban view; "manual" or "filter" on a kanban one. */
+  bucket_configuration_mode: string;
+}
+
+/**
+ * A kanban bucket. The view-tasks read embeds each bucket's `tasks` (in column order); the plain
+ * buckets listing sends `tasks: null` and is used only to map a column name to its id for a move.
+ * `count` is deliberately not declared — it can lag the set actually returned, so it must not
+ * drive the board-read loop — and neither is the filter-mode array-index id, meaningless as an
+ * address.
+ */
+export interface RawBucket {
+  id: number;
+  title: string;
+  tasks: RawTask[] | null;
 }
 
 /** Writable task fields, as the REST API accepts them. */

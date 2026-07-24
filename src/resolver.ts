@@ -8,7 +8,7 @@
  * injected client, which keeps the one-host rule enforced in a single place.
  */
 import type { TaskQuery } from "./client.js";
-import type { RawLabel, RawProject, RawTask } from "./types.js";
+import type { BoardMode, RawBucket, RawLabel, RawProject, RawTask, RawView } from "./types.js";
 
 /**
  * The slice of the client this module needs. Declared structurally rather than importing
@@ -18,6 +18,14 @@ export interface ResolverClient {
   listProjects(): Promise<RawProject[]>;
   listTasks(query: TaskQuery): Promise<RawTask[]>;
   listLabels(): Promise<RawLabel[]>;
+  listViews(projectId: number): Promise<RawView[]>;
+  listBuckets(projectId: number, viewId: number): Promise<RawBucket[]>;
+}
+
+/** A project's kanban view, located: the view id to address the board by, and its bucket mode. */
+export interface KanbanView {
+  id: number;
+  mode: BoardMode;
 }
 
 /**
@@ -323,6 +331,73 @@ export class Resolver {
     }
 
     return [...ids];
+  }
+
+  /**
+   * A project's kanban view: the first by display order, with the mode that decides whether a
+   * task moves by a bucket operation (`manual`) or by changing the fields its column filters on
+   * (`filter`). A project can hold several kanban views; taking the first by `position` is
+   * deliberate and stated, never a silent merge of columns across views.
+   *
+   * A project with no kanban view has no board at all, which is a different fact from an empty
+   * board — so it is an error naming the absence, not an empty result the caller would misread as
+   * "the board has no columns".
+   */
+  async resolveKanbanView(projectId: number): Promise<KanbanView> {
+    const [first] = (await this.#client.listViews(projectId))
+      .filter((view) => view.view_kind === "kanban")
+      .sort((a, b) => a.position - b.position);
+
+    if (first === undefined) {
+      throw new Error(
+        `Project ${projectId} has no kanban view, so there is no board to read. Add a kanban view in Vikunja, or list its tasks with vikunja_list_tasks.`,
+      );
+    }
+
+    // Only a manual board is movable by bucket. Anything that is not "manual" is treated as
+    // filter, so an unexpected mode refuses a move rather than attempting a bucket op that cannot
+    // apply — the safe default, since a filter board has no `task_buckets` rows to write.
+    return {
+      id: first.id,
+      mode: first.bucket_configuration_mode === "manual" ? "manual" : "filter",
+    };
+  }
+
+  /**
+   * A column name -> its bucket id, within one manual view, for a move.
+   *
+   * Bucket titles are not unique — Vikunja enforces nothing there — so a shared name is reported
+   * as ambiguous rather than resolved to one, the same "never guess" rule this module applies to
+   * project keys and label titles. An unknown name lists the columns that do exist. The resolved
+   * id is used only to build the move URL and never leaves this layer; the ambiguity error names
+   * the count, not the ids, because a numeric bucket id is not an address the model may hold.
+   */
+  async resolveBucketId(projectId: number, viewId: number, column: string): Promise<number> {
+    const wanted = column.trim().toLowerCase();
+
+    if (wanted === "") {
+      throw new Error('A column is named by its title, e.g. "Doing".');
+    }
+
+    const buckets = await this.#client.listBuckets(projectId, viewId);
+    const [match, ...rest] = buckets.filter(
+      (bucket) => bucket.title.trim().toLowerCase() === wanted,
+    );
+
+    if (match === undefined) {
+      const names = buckets.map((bucket) => `"${bucket.title}"`).join(", ");
+      throw new Error(
+        `This board has no column named "${column}". Its columns are: ${names || "(none)"}.`,
+      );
+    }
+
+    if (rest.length > 0) {
+      throw new Error(
+        `This board has ${rest.length + 1} columns named "${column}", so the name does not identify one. Rename one in Vikunja so the target is unambiguous.`,
+      );
+    }
+
+    return match.id;
   }
 
   /**

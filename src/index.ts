@@ -8,10 +8,12 @@ import { registerCommentTaskTool } from "./tools/comment-task.js";
 import { registerCompleteTaskTool } from "./tools/complete-task.js";
 import { registerCreateTaskTool } from "./tools/create-task.js";
 import { registerDeleteTaskTool } from "./tools/delete-task.js";
+import { registerGetBoardTool } from "./tools/get-board.js";
 import { registerGetTaskTool } from "./tools/get-task.js";
 import { registerListLabelsTool } from "./tools/list-labels.js";
 import { registerListProjectsTool } from "./tools/list-projects.js";
 import { registerListTasksTool } from "./tools/list-tasks.js";
+import { registerMoveTaskTool } from "./tools/move-task.js";
 import { registerUpdateTaskTool } from "./tools/update-task.js";
 
 async function main(): Promise<void> {
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
   registerListTasksTool(server, client, resolver);
   registerGetTaskTool(server, client, resolver);
   registerListLabelsTool(server, client);
+  registerGetBoardTool(server, client, resolver);
   //       See CLAUDE.md -> "Tool surface". Each tool lives in src/tools/*.
 
   // Write tools. One per operation, and never behind a shared `subcommand` argument: an MCP
@@ -47,6 +50,7 @@ async function main(): Promise<void> {
   registerUpdateTaskTool(server, client, resolver);
   registerCompleteTaskTool(server, client, resolver);
   registerCommentTaskTool(server, client, resolver);
+  registerMoveTaskTool(server, client, resolver);
   registerDeleteTaskTool(server, client, resolver);
 
   const transport = new StdioServerTransport();

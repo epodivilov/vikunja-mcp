@@ -52,6 +52,7 @@ Read (safe to allow-list):
 - `vikunja_list_tasks` — filter by project / done / free-text search
 - `vikunja_get_task` — by key (`INFRA-41`) or explicit global id
 - `vikunja_list_labels`
+- `vikunja_get_board` — a project's kanban board as ordered columns of lean tasks, plus its mode
 
 Write (keep gated):
 
@@ -59,6 +60,7 @@ Write (keep gated):
 - `vikunja_update_task`
 - `vikunja_complete_task`
 - `vikunja_comment_task`
+- `vikunja_move_task` — move a task into a named column on a manual-bucket board
 - `vikunja_delete_task`
 
 Because each operation is its own tool, you can grant read access permanently while still
@@ -71,7 +73,8 @@ reviewing every write:
       "mcp__vikunja__vikunja_list_projects",
       "mcp__vikunja__vikunja_list_tasks",
       "mcp__vikunja__vikunja_get_task",
-      "mcp__vikunja__vikunja_list_labels"
+      "mcp__vikunja__vikunja_list_labels",
+      "mcp__vikunja__vikunja_get_board"
     ]
   }
 }

@@ -56,10 +56,12 @@ primary reason this project exists.
 | `vikunja_list_tasks` | read | filters: project, done, search; lean rows |
 | `vikunja_get_task` | read | input: key (`INFRA-41`) or `{ id }` |
 | `vikunja_list_labels` | read | for label mapping |
+| `vikunja_get_board` | read | project's kanban board as ordered columns of lean tasks + mode; reads the per-view kanban endpoint, both board modes |
 | `vikunja_create_task` | write | markdown description accepted |
 | `vikunja_update_task` | write | partial fields incl. `done` |
 | `vikunja_complete_task` | write | convenience over update |
 | `vikunja_comment_task` | write | |
+| `vikunja_move_task` | write | move a task into a named column; manual-bucket boards only, refuses on filter boards |
 | `vikunja_delete_task` | write | isolated so it can be denied on its own |
 
 ## Invariants
@@ -119,8 +121,15 @@ collapse the whole key-resolution dance below into one request.)
   says — while `GET /tasks/{id}` returns the very same task. Probed on 2.3.0 with a throwaway
   archived project: `filter=project_id = 14 && index = 1` answered `[]`, `GET /tasks/579` answered
   the task. So a key in an archived project is **not resolvable** on the filter path at all;
-  `resolveTask` says so instead of claiming the index does not exist. Writes the server refuses
-  on its own.
+  `resolveTask` says so instead of claiming the index does not exist. Writes are **not** uniformly
+  refused, so do not assume the archive flag protects anything: updating the project itself is
+  refused (see below), but the kanban bucket-move endpoint goes straight through. Probed on 2.3.0
+  with a throwaway archived project: `POST /projects/{id}/views/{view}/buckets/{bucket}/tasks`
+  moved a task To-Do -> Done and flipped its `done` while the project was archived. This is why
+  the archived refusals in `resolver` live only on the *listing* paths: the point is never to be
+  stricter than the server, it is that `GET /tasks` answers `[]` — indistinguishable from "this
+  project has no tasks" — and that silent lie is what has to be refused. Where the server answers
+  honestly, whether by doing the write or by erroring, we pass it through.
 - Updating a project writes a fixed column set, so an update that omits `identifier` **erases
   it** — observed live: archiving through a client that PATCHes only `is_archived` left the
   project with `identifier: ""`, silently destroying every task key in it. An archived project

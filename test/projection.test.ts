@@ -10,6 +10,8 @@ import {
   htmlToMarkdown,
   markdownToHtml,
   nullableDate,
+  toLeanBoard,
+  toLeanColumn,
   toLeanLabel,
   toLeanProject,
   toLeanTask,
@@ -293,6 +295,71 @@ describe("round trip", () => {
     const once = htmlToMarkdown(markdownToHtml("Cost is 2 * 3 and file_name_here"));
     assert.equal(once, "Cost is 2 \\* 3 and file\\_name\\_here");
     assert.equal(htmlToMarkdown(markdownToHtml(once)), once);
+  });
+});
+
+describe("toLeanColumn / toLeanBoard", () => {
+  const first: RawTask = { ...bareTask, id: 1, index: 1, identifier: "INFRA-1", title: "First" };
+  const second: RawTask = {
+    ...bareTask,
+    id: 2,
+    index: 2,
+    identifier: "INFRA-2",
+    title: "Second",
+    done: true,
+  };
+
+  it("names a column by its bucket title and projects its tasks to lean rows", () => {
+    assert.deepEqual(toLeanColumn({ id: 8, title: "Doing", tasks: [first] }), {
+      name: "Doing",
+      tasks: [{ ref: "INFRA-1", id: 1, title: "First", done: false, labels: [] }],
+    });
+  });
+
+  it("turns a bucket carrying null tasks into an empty column", () => {
+    assert.deepEqual(toLeanColumn({ id: 8, title: "Doing", tasks: null }), {
+      name: "Doing",
+      tasks: [],
+    });
+  });
+
+  it("leaks neither the bucket id nor a raw task field into a column", () => {
+    const column = toLeanColumn({ id: 8, title: "Doing", tasks: [first] });
+    assert.deepEqual(Object.keys(column).sort(), ["name", "tasks"]);
+    const [task] = column.tasks;
+    assert.ok(task);
+    assert.equal("project_id" in task, false);
+    assert.equal("bucket_id" in task, false);
+    assert.equal("description" in task, false);
+  });
+
+  it("carries a manual board's mode and its columns in the server's order", () => {
+    const board = toLeanBoard("manual", [
+      { id: 8, title: "Doing", tasks: [first] },
+      { id: 9, title: "Done", tasks: [second] },
+    ]);
+
+    assert.equal(board.mode, "manual");
+    assert.deepEqual(
+      board.columns.map((column) => column.name),
+      ["Doing", "Done"],
+    );
+    assert.deepEqual(board.columns[1]?.tasks, [
+      { ref: "INFRA-2", id: 2, title: "Second", done: true, labels: [] },
+    ]);
+  });
+
+  it("carries a filter board's synthesized columns with the same shape and mode filter", () => {
+    const board = toLeanBoard("filter", [
+      { id: 0, title: "Specified", tasks: [first] },
+      { id: 1, title: "In Progress", tasks: [second] },
+    ]);
+
+    assert.equal(board.mode, "filter");
+    assert.deepEqual(
+      board.columns.map((column) => column.name),
+      ["Specified", "In Progress"],
+    );
   });
 });
 

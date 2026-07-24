@@ -334,6 +334,125 @@ describe("client transport: redirect refusal", () => {
   });
 });
 
+describe("client transport: kanban board", () => {
+  function boardTask(id: number, index: number, identifier: string): RawTask {
+    return {
+      id,
+      project_id: 3,
+      index,
+      identifier,
+      title: `Task ${id}`,
+      description: "",
+      done: false,
+      priority: 0,
+      due_date: "0001-01-01T00:00:00Z",
+      labels: null,
+    };
+  }
+
+  it("reads the board from the view-tasks endpoint and nowhere else", async () => {
+    const { fetch, calls } = stubFetch(() => page([{ id: 7, title: "To-Do", tasks: [] }], 1));
+
+    await new VikunjaClient(config, { fetch }).readBoard(3, 12);
+
+    for (const call of calls) {
+      assert.equal(
+        new URL(call.url).pathname,
+        "/api/v1/projects/3/views/12/tasks",
+        "only the per-view kanban endpoint is read — never /buckets, never the flat /tasks list",
+      );
+    }
+  });
+
+  it("merges every page of a column, since the board read always reports a single page", async () => {
+    // The kanban view-tasks response slices tasks WITHIN each bucket by `page`, while
+    // x-pagination-total-pages is always 1 (it counts buckets, not tasks). A loop that trusted
+    // that header would truncate a column at one page; readBoard walks until a page adds no task
+    // to any bucket. The stub reproduces that shape: same page number sliced into every bucket.
+    const board = [
+      {
+        id: 7,
+        title: "To-Do",
+        tasks: [boardTask(1, 1, "INFRA-1"), boardTask(2, 2, "INFRA-2"), boardTask(3, 3, "INFRA-3")],
+      },
+      { id: 9, title: "Done", tasks: [boardTask(9, 9, "INFRA-9")] },
+    ];
+
+    const { fetch, calls } = stubFetch((call) => {
+      const params = new URL(call.url).searchParams;
+      const pageNumber = Number(params.get("page"));
+      const perPage = Number(params.get("per_page"));
+      const start = (pageNumber - 1) * perPage;
+      const sliced = board.map((bucket) => ({
+        id: bucket.id,
+        title: bucket.title,
+        tasks: bucket.tasks.slice(start, start + perPage),
+      }));
+      return page(sliced, 1);
+    });
+
+    const result = await new VikunjaClient(config, { fetch, pageSize: 2 }).readBoard(3, 12);
+
+    assert.deepEqual(
+      result.map((bucket) => bucket.id),
+      [7, 9],
+      "columns kept in first-seen order",
+    );
+    assert.deepEqual(
+      result[0]?.tasks?.map((task) => task.id),
+      [1, 2, 3],
+      "To-Do merged across pages rather than truncated at the first",
+    );
+    assert.deepEqual(
+      result[1]?.tasks?.map((task) => task.id),
+      [9],
+      "Done kept its single task",
+    );
+    assert.ok(calls.length >= 2, "walked past the first page");
+  });
+
+  it("lists a project's views from the views endpoint", async () => {
+    const { fetch, calls } = stubFetch(() =>
+      page([{ id: 12, position: 3, view_kind: "kanban", bucket_configuration_mode: "manual" }], 1),
+    );
+
+    const views = await new VikunjaClient(config, { fetch }).listViews(3);
+
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(new URL(call.url).pathname, "/api/v1/projects/3/views");
+    assert.equal(views[0]?.id, 12);
+  });
+
+  it("lists a view's buckets from the buckets endpoint", async () => {
+    const { fetch, calls } = stubFetch(() => page([{ id: 7, title: "To-Do", tasks: null }], 1));
+
+    await new VikunjaClient(config, { fetch }).listBuckets(3, 12);
+
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(new URL(call.url).pathname, "/api/v1/projects/3/views/12/buckets");
+  });
+
+  it("moves a task by POSTing task_id to the bucket-tasks endpoint", async () => {
+    const { fetch, calls } = stubFetch(
+      () =>
+        new Response(JSON.stringify({ task_id: 530, bucket_id: 8 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await new VikunjaClient(config, { fetch }).moveTask(3, 12, 8, 530);
+
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "POST");
+    assert.equal(new URL(call.url).pathname, "/api/v1/projects/3/views/12/buckets/8/tasks");
+    assert.deepEqual(call.body, { task_id: 530 });
+  });
+});
+
 describe("client transport: read-modify-write", () => {
   it("R7: updateTask preserves the fields the patch omits", async () => {
     const current: RawTask = {
