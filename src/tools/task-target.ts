@@ -25,10 +25,39 @@ export const taskTargetShape = {
     ),
 };
 
+/**
+ * The second task of a relation. Its own field names, because a tool naming two tasks cannot
+ * spell both of them `task` — and because an error about the second one has to say which
+ * argument it means.
+ */
+export const otherTaskTargetShape = {
+  otherTask: z
+    .string()
+    .optional()
+    .describe('The other task, by key, e.g. "INFRA-42". The normal way to name it.'),
+  otherId: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Global id of the other task. Escape hatch; prefer `otherTask`."),
+};
+
 export interface TaskTarget {
   task?: string | undefined;
   id?: number | undefined;
 }
+
+/** What the two target arguments are called, so a refusal names the field the caller passed. */
+export interface TaskTargetNames {
+  key: string;
+  id: string;
+}
+
+const TASK_NAMES: TaskTargetNames = { key: "task", id: "id" };
+
+/** The spelling `otherTaskTargetShape` uses; pass it when resolving the second task. */
+export const OTHER_TASK_NAMES: TaskTargetNames = { key: "otherTask", id: "otherId" };
 
 /**
  * The task a tool was pointed at, as the server currently has it.
@@ -43,12 +72,13 @@ export async function resolveTaskTarget(
   client: VikunjaClient,
   resolver: Resolver,
   target: TaskTarget,
+  names: TaskTargetNames = TASK_NAMES,
 ): Promise<RawTask> {
   const key = target.task?.trim();
 
   if (key && target.id !== undefined) {
     throw new Error(
-      `Pass either the key ("${key}") or { id: ${target.id} }, not both — they may name different tasks.`,
+      `Pass either ${names.key} ("${key}") or { ${names.id}: ${target.id} }, not both — they may name different tasks.`,
     );
   }
 
@@ -58,7 +88,7 @@ export async function resolveTaskTarget(
 
   if (!key) {
     throw new Error(
-      'Which task? Pass its key, e.g. { task: "INFRA-41" }, or its global id as { id: 123 }.',
+      `Which task? Pass its key, e.g. { ${names.key}: "INFRA-41" }, or its global id as { ${names.id}: 123 }.`,
     );
   }
 

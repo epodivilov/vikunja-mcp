@@ -50,7 +50,7 @@ Read (safe to allow-list):
 
 - `vikunja_list_projects`
 - `vikunja_list_tasks` — filter by project / done / free-text search
-- `vikunja_get_task` — by key (`INFRA-41`) or explicit global id
+- `vikunja_get_task` — by key (`INFRA-41`) or explicit global id; includes the task's relations
 - `vikunja_list_labels`
 - `vikunja_get_board` — a project's kanban board as ordered columns of lean tasks, plus its mode
 - `vikunja_list_members` — the users a project's tasks can be assigned to
@@ -66,6 +66,8 @@ Write (keep gated):
 - `vikunja_set_task_labels` — replace a task's whole label set; an empty list clears it
 - `vikunja_assign_task` — assign users by username, keeping whoever is already assigned
 - `vikunja_unassign_task` — remove users from a task
+- `vikunja_relate_tasks` — record that one task blocks, precedes, duplicates or parents another
+- `vikunja_unrelate_tasks` — remove one such relation
 - `vikunja_delete_task`
 
 Because each operation is its own tool, you can grant read access permanently while still

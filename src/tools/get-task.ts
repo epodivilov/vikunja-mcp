@@ -8,7 +8,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
-import { toLeanTaskDetail } from "../projection.js";
+import { relatedProjectIds, toLeanTaskDetail } from "../projection.js";
 import type { Resolver } from "../resolver.js";
 import type { RawTask } from "../types.js";
 import { jsonResult } from "./result.js";
@@ -23,10 +23,11 @@ export function registerGetTaskTool(
     {
       title: "Get task",
       description:
-        "Reads one task, including its description as markdown. Address it by key — `ref`, " +
-        "e.g. INFRA-41, exactly as task listings report it. `id` is an escape hatch for the " +
-        "cases a key cannot name: a project with no key, an archived project, or a key two " +
-        "projects claim.",
+        "Reads one task, including its description as markdown and its related tasks — what " +
+        "blocks it, what it blocks, its subtasks and so on, each named by key. Address it by " +
+        "key — `ref`, e.g. INFRA-41, exactly as task listings report it. `id` is an escape " +
+        "hatch for the cases a key cannot name: a project with no key, an archived project, or " +
+        "a key two projects claim.",
       inputSchema: {
         ref: z
           .string()
@@ -42,7 +43,16 @@ export function registerGetTaskTool(
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ ref, id }) => jsonResult(toLeanTaskDetail(await read(client, resolver, ref, id))),
+    async ({ ref, id }) => {
+      const task = await read(client, resolver, ref, id);
+
+      // Related tasks arrive with an empty `identifier` and may sit in other projects, so their
+      // keys are rebuilt from the resolver's project index. A task with no relations asks for
+      // nothing and the lookup costs no request.
+      const refOf = await resolver.taskRefLookup(relatedProjectIds(task));
+
+      return jsonResult(toLeanTaskDetail(task, refOf));
+    },
   );
 }
 

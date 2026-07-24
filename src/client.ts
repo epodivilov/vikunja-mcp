@@ -15,6 +15,7 @@ import type {
   RawTask,
   RawUser,
   RawView,
+  RelationKind,
   TaskWrite,
 } from "./types.js";
 
@@ -229,6 +230,40 @@ export class VikunjaClient {
 
   async deleteTask(id: number): Promise<void> {
     await this.#request<unknown>("DELETE", `/tasks/${id}`);
+  }
+
+  // --- relations ----------------------------------------------------------------
+
+  /**
+   * Relates `taskId` to `otherTaskId` under `kind`, read from `taskId`'s side: `blocking` files
+   * the other task among the ones this task blocks.
+   *
+   * One request, not two. `Create` (v2.3.0 `task_relation.go`) inserts both `(t, o, kind)` and
+   * `(o, t, inverse(kind))` in the same call, so writing the inverse ourselves would only earn
+   * the "relation already exists" refusal. Validation lives one layer up in `CanCreate`: it
+   * rejects an unknown kind and requires read access to the other task, which is why an invalid
+   * relation is refused rather than stored — and why a refusal arrives as a `VikunjaHttpError`
+   * carrying Vikunja's own code (4001 already exists, 4004 a task related to itself, 4005 a
+   * subtask cycle) rather than being swallowed.
+   */
+  async createRelation(taskId: number, otherTaskId: number, kind: RelationKind): Promise<void> {
+    await this.#request<unknown>("PUT", `/tasks/${taskId}/relations`, {
+      body: { other_task_id: otherTaskId, relation_kind: kind },
+    });
+  }
+
+  /**
+   * Removes one relation. The kind and the other task go in the path — this endpoint takes no
+   * body — and the server drops the inverse row along with it, so one call clears both
+   * directions. `encodeURIComponent` because a path segment is the one place a string that is
+   * not the value it claims to be would be read as structure; callers get the kind from
+   * `parseRelationKind` in `types`, and this makes that a belt as well as braces.
+   */
+  async deleteRelation(taskId: number, kind: RelationKind, otherTaskId: number): Promise<void> {
+    await this.#request<unknown>(
+      "DELETE",
+      `/tasks/${taskId}/relations/${encodeURIComponent(kind)}/${otherTaskId}`,
+    );
   }
 
   // --- labels -----------------------------------------------------------------

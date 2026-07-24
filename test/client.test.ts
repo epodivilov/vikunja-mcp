@@ -673,6 +673,57 @@ describe("client transport: assignees", () => {
   });
 });
 
+describe("client transport: task relations", () => {
+  it("R1: relates two tasks with one PUT carrying other_task_id and relation_kind", async () => {
+    const { fetch, calls } = stubFetch(() => new Response("", { status: 201 }));
+
+    await new VikunjaClient(config, { fetch }).createRelation(530, 600, "blocking");
+
+    assert.equal(calls.length, 1, "the inverse relation is the server's write, not a second one");
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "PUT");
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/530/relations");
+    assert.deepEqual(call.body, { other_task_id: 600, relation_kind: "blocking" });
+  });
+
+  it("R4: surfaces Vikunja's refusal with its status and code rather than reporting success", async () => {
+    // 4004 is "cannot relate a task to itself"; an existing relation (4001) and a cycle (4005)
+    // arrive the same way. None of them may be swallowed.
+    const { fetch } = stubFetch(
+      () =>
+        new Response(JSON.stringify({ code: 4004, message: "cannot relate a task to itself" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await assert.rejects(
+      new VikunjaClient(config, { fetch }).createRelation(530, 530, "related"),
+      (error: unknown) => {
+        assert.ok(error instanceof VikunjaHttpError);
+        assert.equal(error.status, 400);
+        assert.equal(error.code, 4004);
+        assert.match(error.message, /cannot relate a task to itself/);
+        return true;
+      },
+    );
+  });
+
+  it("R5: unrelates with a DELETE that puts the kind and the other task in the path", async () => {
+    const { fetch, calls } = stubFetch(() => new Response(null, { status: 204 }));
+
+    await new VikunjaClient(config, { fetch }).deleteRelation(530, "blocking", 600);
+
+    assert.equal(calls.length, 1);
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "DELETE");
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/530/relations/blocking/600");
+    assert.equal(call.body, undefined, "the kind travels in the path, not in a body");
+  });
+});
+
 describe("client transport: read-modify-write", () => {
   it("R7: updateTask preserves the fields the patch omits", async () => {
     const current: RawTask = {

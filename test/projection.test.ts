@@ -10,6 +10,7 @@ import {
   htmlToMarkdown,
   markdownToHtml,
   nullableDate,
+  relatedProjectIds,
   toLeanBoard,
   toLeanColumn,
   toLeanLabel,
@@ -19,7 +20,7 @@ import {
   toLeanUser,
   toTaskWrite,
 } from "../src/projection.ts";
-import type { RawProject, RawTask, RawUser } from "../src/types.ts";
+import type { RawProject, RawTask, RawUser, TaskRefLookup } from "../src/types.ts";
 
 /** A task as the API returns it with every optional value unset. */
 const bareTask: RawTask = {
@@ -132,18 +133,139 @@ describe("toLeanTask", () => {
   });
 });
 
+/**
+ * Project id -> identifier, as the resolver's index has it. Project 9 has none, which is what
+ * makes its tasks render as `#index`.
+ */
+const IDENTIFIERS: Record<number, string> = { 7: "INFRA", 11: "VMCP", 9: "" };
+
+/** The ref builder the resolver hands the projection, spelled out here so the test owns it. */
+const refOf: TaskRefLookup = (projectId, index) => {
+  const identifier = IDENTIFIERS[projectId] ?? "";
+  return identifier === "" ? `#${index}` : `${identifier}-${index}`;
+};
+
+/**
+ * A related task as `ReadOne` embeds it: a full task row whose `identifier` the server never
+ * fills in — `setIdentifier` runs on the task being read and on nothing inside `related_tasks`.
+ */
+function relatedTask(
+  id: number,
+  projectId: number,
+  index: number,
+  title: string,
+  done = false,
+): RawTask {
+  return { ...bareTask, id, project_id: projectId, index, identifier: "", title, done };
+}
+
 describe("toLeanTaskDetail", () => {
   it("omits an empty description", () => {
-    assert.equal("description" in toLeanTaskDetail(bareTask), false);
+    assert.equal("description" in toLeanTaskDetail(bareTask, refOf), false);
   });
 
   it("omits a description cleared in the UI", () => {
-    assert.equal("description" in toLeanTaskDetail({ ...bareTask, description: "<p></p>" }), false);
+    assert.equal(
+      "description" in toLeanTaskDetail({ ...bareTask, description: "<p></p>" }, refOf),
+      false,
+    );
   });
 
   it("converts the description to markdown", () => {
     const raw = { ...bareTask, description: "<h2>Plan</h2><p>Ship <strong>today</strong></p>" };
-    assert.equal(toLeanTaskDetail(raw).description, "## Plan\n\nShip **today**");
+    assert.equal(toLeanTaskDetail(raw, refOf).description, "## Plan\n\nShip **today**");
+  });
+});
+
+describe("toLeanTaskDetail relations", () => {
+  const related: RawTask = {
+    ...bareTask,
+    related_tasks: {
+      blocking: [relatedTask(101, 11, 3, "Ship the client")],
+      subtask: [
+        relatedTask(102, 7, 12, "Write the tests", true),
+        relatedTask(103, 9, 5, "Task of a project with no key"),
+      ],
+    },
+  };
+
+  it("R6: flattens the kind -> tasks map into one typed list", () => {
+    assert.deepEqual(toLeanTaskDetail(related, refOf).relations, [
+      { kind: "blocking", ref: "VMCP-3", title: "Ship the client", done: false },
+      { kind: "subtask", ref: "INFRA-12", title: "Write the tests", done: true },
+      { kind: "subtask", ref: "#5", title: "Task of a project with no key", done: false },
+    ]);
+  });
+
+  it("R6: rebuilds every ref from index and project, never from the embedded identifier", () => {
+    // The server sends "" there. A build that trusted it — or a stale one, as here — would
+    // answer with a key that names a different task, which is the whole bug this guards.
+    const lying: RawTask = {
+      ...bareTask,
+      related_tasks: { related: [{ ...relatedTask(101, 11, 3, "Ship"), identifier: "OLD-999" }] },
+    };
+
+    assert.deepEqual(toLeanTaskDetail(lying, refOf).relations, [
+      { kind: "related", ref: "VMCP-3", title: "Ship", done: false },
+    ]);
+  });
+
+  it("R6: a relation carries nothing but kind, ref, title and done", () => {
+    const [relation] = toLeanTaskDetail(related, refOf).relations ?? [];
+    assert.ok(relation);
+    assert.deepEqual(Object.keys(relation).sort(), ["done", "kind", "ref", "title"]);
+  });
+
+  /** Every shape the server sends for "this task has no relations". */
+  const empties: Array<[string, RawTask["related_tasks"]]> = [
+    ["null, as a nil Go map serializes", null],
+    ["an empty object, as an empty Go map serializes", {}],
+    ["a kind whose array is empty", { related: [] }],
+    ["a kind whose array is null", { related: null }],
+  ];
+
+  for (const [name, related_tasks] of empties) {
+    it(`R6: carries no relations field when related_tasks is ${name}`, () => {
+      assert.equal("relations" in toLeanTaskDetail({ ...bareTask, related_tasks }, refOf), false);
+    });
+  }
+
+  it("R6: carries no relations field when the server omits related_tasks entirely", () => {
+    assert.equal("relations" in toLeanTaskDetail(bareTask, refOf), false);
+  });
+
+  it("R6: a listing row still carries neither relations nor a description", () => {
+    const lean = toLeanTask(related);
+    assert.equal("relations" in lean, false);
+    assert.equal("description" in lean, false);
+  });
+
+  it("R6: reports the projects whose identifiers the refs have to be built from", () => {
+    assert.deepEqual(
+      relatedProjectIds(related).sort((a, b) => a - b),
+      [7, 9, 11],
+    );
+  });
+
+  it("R6: reports no project to look up when there are no relations", () => {
+    assert.deepEqual(relatedProjectIds(bareTask), []);
+    assert.deepEqual(relatedProjectIds({ ...bareTask, related_tasks: null }), []);
+    assert.deepEqual(relatedProjectIds({ ...bareTask, related_tasks: { related: [] } }), []);
+  });
+
+  it("R6: names each project once, however many related tasks it holds", () => {
+    const many: RawTask = {
+      ...bareTask,
+      related_tasks: {
+        blocking: [relatedTask(1, 11, 1, "a")],
+        related: [relatedTask(2, 11, 2, "b"), relatedTask(3, 7, 3, "c")],
+      },
+    };
+
+    assert.deepEqual(
+      relatedProjectIds(many).sort((a, b) => a - b),
+      [7, 11],
+    );
   });
 });
 

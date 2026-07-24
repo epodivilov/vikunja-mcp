@@ -12,6 +12,7 @@ import type {
   LeanColumn,
   LeanLabel,
   LeanProject,
+  LeanRelation,
   LeanTask,
   LeanTaskDetail,
   LeanUser,
@@ -21,6 +22,7 @@ import type {
   RawTask,
   RawUser,
   TaskFields,
+  TaskRefLookup,
   TaskWrite,
 } from "./types.js";
 
@@ -246,12 +248,69 @@ export function toTaskWrite(fields: TaskFields): TaskWrite {
   return write;
 }
 
-export function toLeanTaskDetail(raw: RawTask): LeanTaskDetail {
+/**
+ * The projects a task's related tasks live in — the identifiers a caller has to look up before
+ * those tasks can be named by key. Distinct ids, in no particular order; empty when the task has
+ * no relations, which is the signal that no project listing is needed at all.
+ *
+ * Separate from the projection below because the lookup it feeds is asynchronous and this module
+ * is not: the caller resolves these, then hands the answer back in as `refOf`.
+ */
+export function relatedProjectIds(raw: RawTask): number[] {
+  const ids = new Set<number>();
+
+  for (const related of Object.values(raw.related_tasks ?? {})) {
+    for (const task of related ?? []) {
+      ids.add(task.project_id);
+    }
+  }
+
+  return [...ids];
+}
+
+/**
+ * `related_tasks` -> one flat list of lean relations, each carrying the kind it was filed under.
+ *
+ * The ref is rebuilt through `refOf` rather than read from the related task's own `identifier`:
+ * the server leaves that empty on every embedded row, and a related task may well sit in another
+ * project — including an archived one — whose prefix only the resolver knows.
+ *
+ * Null, `{}` and an absent field all mean "no relations", and so does a kind whose array is
+ * empty; each is a shape Vikunja actually sends.
+ */
+export function toLeanRelations(raw: RawTask, refOf: TaskRefLookup): LeanRelation[] {
+  const relations: LeanRelation[] = [];
+
+  for (const [kind, related] of Object.entries(raw.related_tasks ?? {})) {
+    for (const task of related ?? []) {
+      relations.push({
+        kind,
+        ref: refOf(task.project_id, task.index),
+        title: task.title,
+        done: task.done,
+      });
+    }
+  }
+
+  return relations;
+}
+
+/**
+ * One task in full. `refOf` is required rather than optional so that a caller cannot drop a
+ * task's relations by forgetting an argument — the omission would be silent, and "this task
+ * blocks nothing" is a claim worth being unable to make by accident.
+ */
+export function toLeanTaskDetail(raw: RawTask, refOf: TaskRefLookup): LeanTaskDetail {
   const detail: LeanTaskDetail = toLeanTask(raw);
   const description = htmlToMarkdown(raw.description);
 
   if (description) {
     detail.description = description;
+  }
+
+  const relations = toLeanRelations(raw, refOf);
+  if (relations.length > 0) {
+    detail.relations = relations;
   }
 
   return detail;
