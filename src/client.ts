@@ -218,6 +218,42 @@ export class VikunjaClient {
     });
   }
 
+  // --- server info ------------------------------------------------------------
+
+  /**
+   * The instance's own `max_items_per_page`, read from `GET /info`, or `undefined` when `/info`
+   * cannot be read or does not report a usable value. This is the number the server actually
+   * honors as the `per_page` ceiling — it clamps anything larger to it — so discovering it turns
+   * the guessed `PAGE_SIZE` into the value the instance publishes.
+   *
+   * Goes through `#request` so the one-host rule, redirect refusal and error handling stay in one
+   * place. `/info` is a bare object, not a paginated collection, so it is not routed through
+   * `#requestAll`. The endpoint needs no auth; the `Bearer` header `#request` attaches anyway is
+   * harmless.
+   *
+   * Every failure mode — unreachable, non-2xx, non-JSON, field absent, field not a positive
+   * integer — collapses to `undefined` on purpose: discovery must never keep the server from
+   * starting. `resolvePageSize` turns that `undefined` into the default plus one diagnostic, so
+   * the swallow here is the documented fallback, not a hidden error.
+   */
+  async fetchMaxItemsPerPage(): Promise<number | undefined> {
+    let info: unknown;
+    try {
+      info = (await this.#request<unknown>("GET", "/info")).data;
+    } catch {
+      return undefined;
+    }
+
+    if (typeof info !== "object" || info === null || !("max_items_per_page" in info)) {
+      return undefined;
+    }
+
+    const reported = (info as { max_items_per_page: unknown }).max_items_per_page;
+    return typeof reported === "number" && Number.isInteger(reported) && reported > 0
+      ? reported
+      : undefined;
+  }
+
   // --- transport --------------------------------------------------------------
 
   /**
@@ -331,6 +367,44 @@ export class VikunjaClient {
     const queryString = search.toString();
     return `${this.#config.baseUrl}${path}${queryString === "" ? "" : `?${queryString}`}`;
   }
+}
+
+export interface ResolvePageSizeOptions {
+  /** The `fetch` discovery goes through. Defaults to `globalThis.fetch`; tests inject a stub. */
+  fetch?: typeof globalThis.fetch;
+  /**
+   * Sink for the single diagnostic emitted when discovery falls back to the default. `index.ts`
+   * wires it to stderr; keeping it injectable is what lets the network layer stay free of any
+   * `process` coupling. Called at most once, and only on the fallback path.
+   */
+  warn?: (message: string) => void;
+}
+
+/**
+ * The page size to send on every paginated request, discovered from the instance rather than
+ * guessed. Reads `max_items_per_page` from `GET /info` once, at startup, and returns it; when
+ * `/info` cannot be read or does not report a usable value, returns the default `PAGE_SIZE` and
+ * signals the fallback through `options.warn`.
+ *
+ * This is the startup seam, and the only path that discovers. The plain `new VikunjaClient(config)`
+ * constructor never touches `/info`, so the pagination escape hatch — `new VikunjaClient(config,
+ * { pageSize })` — keeps its explicit value and issues no `/info` request.
+ */
+export async function resolvePageSize(
+  config: Config,
+  options: ResolvePageSizeOptions = {},
+): Promise<number> {
+  const probe = new VikunjaClient(config, { fetch: options.fetch });
+  const discovered = await probe.fetchMaxItemsPerPage();
+  if (discovered !== undefined) {
+    return discovered;
+  }
+
+  options.warn?.(
+    `Could not read a usable max_items_per_page from ${config.baseUrl}/info; ` +
+      `falling back to the default page size of ${PAGE_SIZE}.`,
+  );
+  return PAGE_SIZE;
 }
 
 /**
