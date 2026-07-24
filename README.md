@@ -61,6 +61,8 @@ Write (keep gated):
 - `vikunja_complete_task`
 - `vikunja_comment_task`
 - `vikunja_move_task` — move a task into a named column on a manual-bucket board
+- `vikunja_label_task` — add and/or remove labels on a task, leaving the rest alone
+- `vikunja_set_task_labels` — replace a task's whole label set; an empty list clears it
 - `vikunja_delete_task`
 
 Because each operation is its own tool, you can grant read access permanently while still

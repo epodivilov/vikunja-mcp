@@ -27,8 +27,9 @@ export function registerMoveTaskTool(
       description:
         "Move a task into a named column of its project's kanban board. Works only on a manual " +
         "board, where columns are hand-managed buckets; on a filter board the columns are defined " +
-        "by filters, so the task moves by changing the fields those filters test (e.g. its labels) " +
-        "— this tool refuses there and says so. Moving into or out of the board's Done column flips " +
+        "by filters, so the task moves by changing the fields those filters test — most often its " +
+        "labels, via vikunja_label_task — and this tool refuses there and says so. Moving into or " +
+        "out of the board's Done column flips " +
         "the task's done state server-side, and a column at its WIP limit rejects the move. Name " +
         "the task by key (INFRA-41) and the column by its name, exactly as vikunja_get_board reports it.",
       inputSchema: z.strictObject({
@@ -49,7 +50,7 @@ export function registerMoveTaskTool(
       // is nothing to move. The message names the real mechanism rather than failing opaquely.
       if (view.mode !== "manual") {
         throw new Error(
-          `${target.identifier} sits on a filter-mode board, whose columns are defined by filters, not hand-managed buckets. A task moves between them by changing the fields those filters test — most often its labels, via vikunja_update_task — not by a board move.`,
+          `${target.identifier} sits on a filter-mode board, whose columns are defined by filters, not hand-managed buckets. A task moves between them by changing the fields those filters test — most often its labels, via vikunja_label_task — not by a board move.`,
         );
       }
 

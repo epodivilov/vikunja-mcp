@@ -456,6 +456,120 @@ describe("Resolver.resolveLabelIds", () => {
     assert.deepEqual(await new Resolver(client).resolveLabelIds([]), []);
     assert.equal(client.calls.listLabels, 0);
   });
+
+  it("resolves titles and ids in one call, keeping the order they were named in", async () => {
+    const pipeline: RawLabel[] = [
+      { id: 5, title: "feature" },
+      { id: 45, title: "specified" },
+    ];
+
+    assert.deepEqual(
+      await labelResolver(pipeline).resolveLabelIds(["specified", 5, "SPECIFIED"]),
+      [45, 5],
+    );
+  });
+});
+
+/**
+ * The incremental change `vikunja_label_task` lands: `(current ∪ add) \ remove`, computed from
+ * the labels the task already carries so the whole set can go to the bulk endpoint in one write.
+ *
+ * The asymmetry between the two arguments is the point. An `add` names a label that may not be
+ * on the task, so it is resolved instance-wide and an ambiguous title has to be refused. A
+ * `remove` names one that is, so it is matched against the task's own labels — which is what
+ * makes a title shared instance-wide unambiguous there, and a title the task does not carry a
+ * no-op rather than an error.
+ */
+describe("Resolver.resolveLabelChange", () => {
+  const LABELS: RawLabel[] = [
+    { id: 2, title: "bug" },
+    { id: 3, title: "bug" },
+    { id: 5, title: "feature" },
+    { id: 45, title: "specified" },
+    { id: 46, title: "in-progress" },
+  ];
+
+  /** A task in the middle of the pipeline: one workflow label, one kind label. */
+  const CURRENT: RawLabel[] = [
+    { id: 5, title: "feature" },
+    { id: 45, title: "specified" },
+  ];
+
+  function changeResolver(labels = LABELS): Resolver {
+    return new Resolver(stubClient(PROJECTS, TASKS, { labels }));
+  }
+
+  it("adds one label and drops another in a single resulting set", async () => {
+    const next = await changeResolver().resolveLabelChange(CURRENT, {
+      add: ["in-progress"],
+      remove: ["specified"],
+    });
+
+    assert.deepEqual(next, [5, 46]);
+  });
+
+  it("leaves the set unchanged when a label already on the task is re-added", async () => {
+    const next = await changeResolver().resolveLabelChange(CURRENT, { add: ["feature"] });
+
+    assert.deepEqual(next, [5, 45]);
+  });
+
+  it("leaves the set unchanged when a removal names a label the task does not carry", async () => {
+    // Idempotent by construction: the set simply does not contain it, so nothing is asked of the
+    // server. No error, and no per-label DELETE that would come back as a bare 403.
+    const next = await changeResolver().resolveLabelChange(CURRENT, { remove: ["bug"] });
+
+    assert.deepEqual(next, [5, 45]);
+  });
+
+  it("matches a removal against the task's own labels, so a shared title still names one", async () => {
+    // "bug" is two labels instance-wide, which would be ambiguous on an add. On a remove it is
+    // not: only one of them is on the task, and that is the one meant.
+    const current: RawLabel[] = [
+      { id: 2, title: "bug" },
+      { id: 5, title: "feature" },
+    ];
+
+    const next = await changeResolver().resolveLabelChange(current, { remove: ["BUG"] });
+
+    assert.deepEqual(next, [5], "dropped the bug the task carried, not the other one");
+  });
+
+  it("refuses an ambiguous title on the add side, where the instance is what is searched", async () => {
+    await assert.rejects(
+      () => changeResolver().resolveLabelChange(CURRENT, { add: ["bug"] }),
+      /belongs to 2 labels \(ids 2, 3\)/,
+    );
+  });
+
+  it("refuses a label named in both add and remove instead of picking an order", async () => {
+    await assert.rejects(
+      () => changeResolver().resolveLabelChange(CURRENT, { add: ["specified"], remove: [45] }),
+      /both add and remove/,
+    );
+  });
+
+  it("refuses a change that names no label at all, before reading anything", async () => {
+    const client = stubClient(PROJECTS, TASKS, { labels: LABELS });
+
+    await assert.rejects(
+      () => new Resolver(client).resolveLabelChange(CURRENT, {}),
+      /at least one label/,
+    );
+    await assert.rejects(
+      () => new Resolver(client).resolveLabelChange(CURRENT, { add: [], remove: [] }),
+      /at least one label/,
+    );
+    assert.equal(client.calls.listLabels, 0, "an empty change costs no request");
+  });
+
+  it("does not list the instance's labels for a removal, which needs only the task's", async () => {
+    const client = stubClient(PROJECTS, TASKS, { labels: LABELS });
+
+    await new Resolver(client).resolveLabelChange(CURRENT, { remove: ["specified"] });
+
+    assert.equal(client.calls.listLabels, 0);
+  });
 });
 
 describe("Resolver.resolveKanbanView", () => {

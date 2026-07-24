@@ -453,6 +453,65 @@ describe("client transport: kanban board", () => {
   });
 });
 
+describe("client transport: task labels", () => {
+  /** What `POST /tasks/{id}/labels/bulk` answers: 201 echoing the labels it was handed. */
+  function bulkEcho(call: StubCall): Response {
+    return new Response(JSON.stringify(call.body), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("R4: writes the whole label set with one POST to the bulk endpoint", async () => {
+    const { fetch, calls } = stubFetch(bulkEcho);
+
+    await new VikunjaClient(config, { fetch }).setTaskLabels(7, [45, 5]);
+
+    assert.equal(calls.length, 1, "one request for the set — never one per label");
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "POST");
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/7/labels/bulk");
+    // Only `id` is read server-side, and the order is the caller's.
+    assert.deepEqual(call.body, { labels: [{ id: 45 }, { id: 5 }] });
+  });
+
+  it("R2/R4: sends an empty array rather than skipping the call, which is how labels are cleared", async () => {
+    const { fetch, calls } = stubFetch(bulkEcho);
+
+    await new VikunjaClient(config, { fetch }).setTaskLabels(7, []);
+
+    assert.equal(calls.length, 1, "the clear is a request, not an omission");
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/7/labels/bulk");
+    assert.deepEqual(call.body, { labels: [] });
+  });
+
+  it("R4: surfaces a rejected write as a VikunjaHttpError carrying status and code", async () => {
+    // The handler runs the whole reconciliation in one transaction, so a rejected label id rolls
+    // back the deletes too — the caller has to learn that nothing landed rather than assume it did.
+    const { fetch } = stubFetch(
+      () =>
+        new Response(JSON.stringify({ code: 8002, message: "label does not exist" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await assert.rejects(
+      new VikunjaClient(config, { fetch }).setTaskLabels(7, [999]),
+      (error: unknown) => {
+        assert.ok(error instanceof VikunjaHttpError);
+        assert.equal(error.status, 400);
+        assert.equal(error.code, 8002);
+        assert.match(error.message, /label does not exist/);
+        return true;
+      },
+    );
+  });
+});
+
 describe("client transport: read-modify-write", () => {
   it("R7: updateTask preserves the fields the patch omits", async () => {
     const current: RawTask = {

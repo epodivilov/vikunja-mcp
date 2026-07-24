@@ -25,10 +25,11 @@ export function registerUpdateTaskTool(
     {
       title: "Update task",
       description:
-        "Change fields of an existing task. Fields left out keep their current value; fields passed replace it. Labels and assignees cannot be changed here — passing them is an error rather than a silent no-op.",
+        "Change fields of an existing task. Fields left out keep their current value; fields passed replace it. Labels are not task fields and cannot be changed here — use vikunja_label_task to add or remove some, or vikunja_set_task_labels to replace the whole set. Assignees cannot be changed here either. Passing either is an error rather than a silent no-op.",
       // Strict, so a field this tool does not implement is refused instead of dropped. A
       // non-strict schema would answer `{ labels: [...] }` with a success and an unchanged
-      // task, and the description above would be the reason an agent believed it.
+      // task — Vikunja's own task update never touches the label link table — and the
+      // description above would be the reason an agent believed it.
       inputSchema: z.strictObject({
         ...taskTargetShape,
         title: z.string().trim().min(1).optional().describe("New title."),

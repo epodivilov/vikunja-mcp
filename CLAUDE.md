@@ -62,6 +62,8 @@ primary reason this project exists.
 | `vikunja_complete_task` | write | convenience over update |
 | `vikunja_comment_task` | write | |
 | `vikunja_move_task` | write | move a task into a named column; manual-bucket boards only, refuses on filter boards |
+| `vikunja_label_task` | write | add and/or remove labels on a task; incremental, leaves unnamed labels alone |
+| `vikunja_set_task_labels` | write | replace a task's whole label set; `[]` clears it. Split from the above so the wholesale replace can be denied on its own |
 | `vikunja_delete_task` | write | isolated so it can be denied on its own |
 
 ## Invariants
@@ -174,6 +176,27 @@ collapse the whole key-resolution dance below into one request.)
 - Project update differs again: it writes a fixed column set, so omitted numeric fields (e.g.
   `position`) are zeroed — but an omitted `description` is preserved. Send the fields you intend
   to keep.
+- **Labels are a separate resource, not a task field.** `PUT /projects/{id}/tasks` echoes a
+  `labels` array it never stores, and `Task.Update` (`POST /tasks/{id}`) never calls
+  `UpdateTaskLabels` — the bulk label handler is its only caller. So "just put labels in the write
+  payload" is a silent no-op in both directions, and it is also why labels survive the
+  read-modify-write in `client.updateTask`. `vikunja_update_task` must keep refusing `labels`
+  rather than pretending.
+- **`POST /tasks/{taskID}/labels/bulk` reconciles to a set, in one transaction.** Body is
+  `{ "labels": [{ "id": 45 }, ...] }` and only `id` is read. `UpdateTaskLabels` deletes the labels
+  not passed, then adds the ones missing, inside the session `db.NewSession()` opens — so a bad id
+  rolls the deletes back too. Reconciling by set membership is what makes a re-add of a present
+  label, or a remove of an absent one, change nothing: idempotence comes from the endpoint rather
+  than from swallowing error codes. An empty array is the explicit, documented way to clear every
+  label. The 201 body echoes the request's own array, **not** the stored set — read the task back.
+  This is read-modify-write over the whole label set and so clobbers a concurrent change, the same
+  TOCTOU `client.updateTask` already accepts.
+- Per-label `DELETE /tasks/{task}/labels/{label}` on a label the task does not carry answers a
+  **bare 403**, not a 404 and not a no-op: `LabelTask.CanDelete` returns false when the relation
+  row is missing and the handler renders that as "Forbidden" with no Vikunja error code —
+  indistinguishable from a real permission failure. A per-label add is refused with code 8001 when
+  it is already there. Both are reasons the label tools diff to a set and use the bulk endpoint
+  instead of firing per-label writes; `client.addTaskLabel` remains only for `create_task`.
 
 ## Releasing
 
