@@ -34,7 +34,7 @@ src/
   index.ts        transport + tool registration (thin; no business logic)
   config.ts       env -> Config (VIKUNJA_URL, VIKUNJA_API_TOKEN); the ONLY host we talk to
   client.ts       REST over fetch; auth; pagination; error mapping
-  resolver.ts     project-key <-> global id (e.g. INFRA-41 -> 301); caches project identifiers
+  resolver.ts     names -> ids: project keys (INFRA-41 -> 301, cached), label titles, usernames
   projection.ts   raw Vikunja objects -> lean DTOs; markdown <-> html
   types.ts        lean DTOs (LeanTask, LeanProject, ...) shared across layers
   tools/          one file per tool; each a thin adapter over the layers below
@@ -57,21 +57,26 @@ primary reason this project exists.
 | `vikunja_get_task` | read | input: key (`INFRA-41`) or `{ id }` |
 | `vikunja_list_labels` | read | for label mapping |
 | `vikunja_get_board` | read | project's kanban board as ordered columns of lean tasks + mode; reads the per-view kanban endpoint, both board modes |
-| `vikunja_create_task` | write | markdown description accepted |
+| `vikunja_list_members` | read | users a project can assign to, as `{ id, username, name? }`; never an email |
+| `vikunja_create_task` | write | markdown description accepted; `assignees` ride along in the create |
 | `vikunja_update_task` | write | partial fields incl. `done` |
 | `vikunja_complete_task` | write | convenience over update |
 | `vikunja_comment_task` | write | |
 | `vikunja_move_task` | write | move a task into a named column; manual-bucket boards only, refuses on filter boards |
 | `vikunja_label_task` | write | add and/or remove labels on a task; incremental, leaves unnamed labels alone |
 | `vikunja_set_task_labels` | write | replace a task's whole label set; `[]` clears it. Split from the above so the wholesale replace can be denied on its own |
+| `vikunja_assign_task` | write | additive; already-assigned users produce no write |
+| `vikunja_unassign_task` | write | refuses a user who is not assigned — the server would not |
 | `vikunja_delete_task` | write | isolated so it can be denied on its own |
 
 ## Invariants
 
 - **Lean by default.** Every tool returns the minimum an agent needs; no raw API objects.
-  Default `LeanTask`: `{ ref, id, title, done, priority?, due?, labels }`.
-- **Keys, not ids.** Anything a human or agent references is a key (`INFRA-41`). The global
-  `id` is an escape hatch only.
+  Default `LeanTask`: `{ ref, id, title, done, priority?, due?, labels, assignees? }` — assignees
+  are usernames, and the field is absent when the task has none.
+- **Keys, not ids.** Anything a human or agent references is a key (`INFRA-41`), a label title or
+  a username. The global `id` is an escape hatch only — and, being an escape hatch, it is never
+  the *stricter* path: a user id on an assign is passed to the server unchecked (see below).
 - **One host.** Outbound network is limited to `config.baseUrl`. No telemetry, no other fetch
   targets. This is a hard rule — it is the project's privacy guarantee.
 - **All pages.** List operations exhaust pagination; they never silently truncate.
@@ -197,6 +202,51 @@ collapse the whole key-resolution dance below into one request.)
   indistinguishable from a real permission failure. A per-label add is refused with code 8001 when
   it is already there. Both are reasons the label tools diff to a set and use the bulk endpoint
   instead of firing per-label writes; `client.addTaskLabel` remains only for `create_task`.
+- **Assignees stick on create, unlike labels.** `PUT /projects/{id}/tasks` runs
+  `createTask(..., updateAssignees: true)`, writing them in the task's own transaction, which the
+  web handler rolls back on error — so a rejected assignee leaves no task behind and a valid one
+  costs no second request. The response is still not the answer: `setTaskAssignees` echoes back
+  the `[{ id: n }]` objects the request carried, whose `username` is empty, so projecting it would
+  report `assignees: [""]`. Read the task back, as `create-task.ts` already did for labels.
+- **The two assignment endpoints are asymmetric, and only one of them tells the truth.**
+  `PUT /tasks/{t}/assignees` refuses an already-assigned user (HTTP 400, code 4021) and a user
+  without project access (403, code 7003); `DELETE /tasks/{t}/assignees/{u}` is a bare
+  `s.Delete(...)` that never checks the assignment exists and answers 200 for a user who was never
+  assigned. So the "not assigned" refusal is **ours** to make — `resolver.resolveUnassigneeIds`
+  — and the already-assigned skip is ours too, or a 4021 aborts a multi-user call halfway
+  through with part of it applied.
+- **A multi-user assign is not atomic, and must say so.** There is no bulk endpoint (the one that
+  exists replaces the whole list and is not exposed), and a user id is deliberately never gated
+  locally, so a 7003 is knowable only from the response — by which time earlier users in the same
+  call are assigned and stay assigned. `client.addTaskAssignees` therefore names what landed in
+  the error it throws, keeping the server's message verbatim and the original error on `cause`. A
+  failure on the *first* write is passed through untouched: nothing landed, so a
+  partial-application note there would be false. Resolution still precedes every write, so an
+  unresolvable *name* changes nothing at all — the two guarantees are different and only one of
+  them is atomicity.
+- **`GET /projects/{id}/projectusers` is not paginated** (a plain `c.JSON(200, users)`, no
+  `x-pagination-*`), and its membership set is wider than the project's direct shares: the owner,
+  direct user shares, team shares, and everything inherited by walking up the parent chain. Its
+  `s` parameter matches *fuzzily* (ILIKE over name, username **and email**) and must not be used
+  to identify a user — list and match locally, as label resolution does. Emails come back blank
+  without `s`, but `toLeanUser` drops the field regardless: that invariant is the projection's,
+  not the server's.
+- **That listing has a hole, which is why a user id is never gated against it.**
+  `ListUsersFromProject` seeds its id map with the addressed project's `owner_id` only, while
+  access is granted if any *parent's* owner matches — so a parent project's owner can be assigned
+  yet is not listed. The house rule is never to be stricter than the server, so a numeric user id
+  goes through untouched and the 403 (if any) is the server's to send.
+- **Usernames collide case-insensitively.** Uniqueness is a DB index and the comparison is
+  case-sensitive on SQLite, so `Alice` and `alice` coexist — the same trap as project identifiers
+  and label titles. Report the ambiguity with both ids; never resolve to the first match.
+- **An archived project refuses an assignment** — `canDoTaskAssingee` goes through
+  `project.CanUpdate` -> `CanWrite`, so `ErrProjectIsArchived` survives, unlike the kanban bucket
+  move whose stub project trips the un-archive exemption. Pass that refusal along rather than
+  adding a second one. *Listing* the members of an archived project works, so `list-members` uses
+  the plain project resolution, not the archived refusal the task listings apply.
+- **API-token scopes.** These routes group as `tasks_assignees` (create / delete / read_all) and
+  `projects` -> `projectusers`. A token minted before this feature existed may lack them and
+  answer 403; that is deployment configuration, not a code defect — re-mint the token.
 
 ## Releasing
 

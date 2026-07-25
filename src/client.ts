@@ -13,6 +13,7 @@ import type {
   RawLabel,
   RawProject,
   RawTask,
+  RawUser,
   RawView,
   TaskWrite,
 } from "./types.js";
@@ -144,6 +145,24 @@ export class VikunjaClient {
     return this.#requestObject<RawProject>("GET", `/projects/${id}`);
   }
 
+  /**
+   * Everyone Vikunja considers a member of a project: its owner, its direct user shares, the
+   * members of every team it is shared with, and everything inherited by walking up the parent
+   * chain. This is the candidate set for an assignment.
+   *
+   * Deliberately called without the `s` search parameter. `s` matches *fuzzily* — ILIKE over name,
+   * username and email — so it cannot identify one user, and it is also what makes the server fill
+   * in the email field. Listing everyone and matching locally is both correct and less data.
+   *
+   * The endpoint is not paginated on 2.3.0: the handler answers a plain `c.JSON(200, users)` with
+   * no `x-pagination-*` headers, which `#requestAll` reads as a single page. It goes through
+   * `#requestAll` anyway, so an instance that ever does paginate it is exhausted rather than
+   * silently truncated.
+   */
+  listProjectUsers(projectId: number): Promise<RawUser[]> {
+    return this.#requestAll<RawUser>(`/projects/${projectId}/projectusers`);
+  }
+
   // --- tasks ------------------------------------------------------------------
 
   /**
@@ -168,8 +187,26 @@ export class VikunjaClient {
     return this.#requestObject<RawTask>("GET", `/tasks/${id}`);
   }
 
-  createTask(projectId: number, task: TaskWrite): Promise<RawTask> {
-    return this.#requestObject<RawTask>("PUT", `/projects/${projectId}/tasks`, { body: task });
+  /**
+   * Creates a task, optionally assigned to `assigneeIds` in the same request.
+   *
+   * Assignees travel in the create payload where labels cannot: the handler runs
+   * `createTask(..., updateAssignees: true)`, writing them inside the task's own transaction,
+   * which the web layer rolls back on error. So a rejected assignee leaves no half-created task
+   * behind, and a valid one costs no second request.
+   *
+   * The response is not the created task as stored: it echoes back the very `[{ id }]` objects
+   * this body carried, with no usernames on them. Callers read the task back.
+   */
+  createTask(
+    projectId: number,
+    task: TaskWrite,
+    assigneeIds: readonly number[] = [],
+  ): Promise<RawTask> {
+    const body =
+      assigneeIds.length === 0 ? task : { ...task, assignees: assigneeIds.map((id) => ({ id })) };
+
+    return this.#requestObject<RawTask>("PUT", `/projects/${projectId}/tasks`, { body });
   }
 
   /**
@@ -236,6 +273,72 @@ export class VikunjaClient {
     await this.#request<unknown>("POST", `/tasks/${taskId}/labels/bulk`, {
       body: { labels: labelIds.map((id) => ({ id })) },
     });
+  }
+
+  // --- assignees --------------------------------------------------------------
+
+  /**
+   * Assigns one user to a task. One request per user; the endpoint takes one id.
+   *
+   * Refusals reach the caller as `VikunjaHttpError` rather than being swallowed: 400 / code 4021
+   * for a user already assigned (which the resolver's diff avoids reaching), 403 / code 7003 for
+   * a user without access to the project, and the archived-project error, since the permission
+   * check loads the project from the task and `CanWrite` refuses an archived one.
+   */
+  async addTaskAssignee(taskId: number, userId: number): Promise<void> {
+    await this.#request<unknown>("PUT", `/tasks/${taskId}/assignees`, {
+      body: { user_id: userId },
+    });
+  }
+
+  /**
+   * Assigns several users, one request each, and — this is the whole reason the loop lives here
+   * rather than in the tool — reports honestly when the run is cut short.
+   *
+   * There is no bulk endpoint that would make this atomic, and the refusal that stops it cannot be
+   * pre-empted: a user id is deliberately never gated against the project's member listing (that
+   * listing has a hole, and the access check is the server's), so a 403 arrives only once the
+   * request is out. By then earlier assignments have already been written and they stay written.
+   *
+   * Reporting that as a plain failure would leave the caller with a false picture — an agent would
+   * retry the whole call or tell its user nothing changed, while the task carries half of it. So a
+   * failure after something landed is rethrown naming exactly what landed, with the server's own
+   * message kept verbatim and the original error on `cause` for anyone who wants its status. A
+   * failure on the first write is passed through untouched: nothing landed, so there is nothing to
+   * add, and a partial-application note there would be its own kind of lie.
+   */
+  async addTaskAssignees(taskId: number, userIds: readonly number[]): Promise<void> {
+    const assigned: number[] = [];
+
+    for (const userId of userIds) {
+      try {
+        await this.addTaskAssignee(taskId, userId);
+      } catch (cause) {
+        if (assigned.length === 0) {
+          throw cause;
+        }
+
+        const landed = assigned.map((id) => `user ${id}`).join(", ");
+        const reason = cause instanceof Error ? cause.message : String(cause);
+        throw new Error(
+          `Assigned ${landed} to task ${taskId}, then Vikunja refused user ${userId} — so this call applied only part of what it named, and what it wrote stays written. Read the task to see who is assigned now. The refusal was: ${reason}`,
+          { cause },
+        );
+      }
+
+      assigned.push(userId);
+    }
+  }
+
+  /**
+   * Unassigns one user from a task. The user is named by the path, so there is no body.
+   *
+   * The server does not check that the assignment existed — the handler is a bare delete — so this
+   * answers 200 for a user who was never assigned. Refusing that case is the layer above's job;
+   * reporting it as done would be a lie the server is happy to tell.
+   */
+  async removeTaskAssignee(taskId: number, userId: number): Promise<void> {
+    await this.#request<unknown>("DELETE", `/tasks/${taskId}/assignees/${userId}`);
   }
 
   // --- kanban board -----------------------------------------------------------

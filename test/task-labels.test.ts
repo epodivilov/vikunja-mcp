@@ -68,6 +68,7 @@ function stack(current: readonly number[]): {
     priority: 0,
     due_date: "0001-01-01T00:00:00Z",
     labels: labelled(current),
+    assignees: null,
   };
 
   const fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

@@ -8,11 +8,20 @@
  * injected client, which keeps the one-host rule enforced in a single place.
  */
 import type { TaskQuery } from "./client.js";
-import type { BoardMode, RawBucket, RawLabel, RawProject, RawTask, RawView } from "./types.js";
+import type {
+  BoardMode,
+  RawBucket,
+  RawLabel,
+  RawProject,
+  RawTask,
+  RawUser,
+  RawView,
+} from "./types.js";
 
 /**
  * The slice of the client this module needs. Declared structurally rather than importing
- * `VikunjaClient` so a test can hand over three functions instead of standing up an HTTP server.
+ * `VikunjaClient` so a test can hand over a handful of functions instead of standing up an HTTP
+ * server.
  */
 export interface ResolverClient {
   listProjects(): Promise<RawProject[]>;
@@ -20,6 +29,7 @@ export interface ResolverClient {
   listLabels(): Promise<RawLabel[]>;
   listViews(projectId: number): Promise<RawView[]>;
   listBuckets(projectId: number, viewId: number): Promise<RawBucket[]>;
+  listProjectUsers(projectId: number): Promise<RawUser[]>;
 }
 
 /** A project's kanban view, located: the view id to address the board by, and its bucket mode. */
@@ -45,6 +55,12 @@ export interface LabelChange {
   /** Labels to end up off it, named against the ones the task already carries. */
   remove?: readonly LabelRef[] | undefined;
 }
+
+/**
+ * A user as an agent names one: the username it reads in a member listing or on a task, or — when
+ * that username turns out to be shared — the global id printed beside it.
+ */
+export type UserRef = string | number;
 
 /** A task key split into the parts Vikunja stores separately. */
 export interface TaskRef {
@@ -416,6 +432,99 @@ export class Resolver {
   }
 
   /**
+   * The users to assign, given who is already assigned: usernames mapped to ids against the
+   * project's member listing, ids passed through, and everyone already on the task dropped.
+   *
+   * Three rules, each with a reason the layer above cannot supply:
+   *
+   * - **A username is matched against the project's members**, case-insensitively and locally.
+   *   The listing's own search parameter matches fuzzily over name, username and email, so it
+   *   cannot identify one user. A username two members share is reported with both ids rather
+   *   than resolved to the lower one — usernames are unique only case-sensitively on SQLite, the
+   *   same trap as project identifiers and label titles.
+   * - **A number is passed straight through, ungated.** Whether a user may be assigned is the
+   *   server's own project-access check, and its member listing has a hole: it seeds the id map
+   *   from the addressed project's owner only, while access is granted if any *parent's* owner
+   *   matches — so the owner of a parent project can be assigned but is not listed. Refusing an
+   *   id here would be stricter than the server, which is never this module's job.
+   * - **Already-assigned users produce no write**, matched by id so the skip does not depend on
+   *   how the caller spelled them. `PUT /tasks/{id}/assignees` refuses a duplicate with code
+   *   4021, which would abort a multi-user call halfway through with some users assigned.
+   *
+   * The listing is fetched lazily and once: a call naming only ids costs no request at all.
+   * Nothing is written by this method — the caller writes only what comes back, so an unresolvable
+   * name leaves the task exactly as it was.
+   */
+  async resolveAssigneeIds(
+    projectId: number,
+    assigned: readonly RawUser[],
+    users: readonly UserRef[],
+  ): Promise<number[]> {
+    if (users.length === 0) {
+      return [];
+    }
+
+    const assignedIds = new Set(assigned.map((user) => user.id));
+    // Keyed by id, so the same user named twice — or once by username and once by id — is
+    // written once. The second write would be the 4021 refusal above.
+    const ids = new Set<number>();
+    let members: RawUser[] | undefined;
+
+    for (const user of users) {
+      let id: number;
+
+      if (typeof user === "number") {
+        id = user;
+      } else {
+        members ??= await this.#client.listProjectUsers(projectId);
+        id = memberByUsername(members, user);
+      }
+
+      if (!assignedIds.has(id)) {
+        ids.add(id);
+      }
+    }
+
+    return [...ids];
+  }
+
+  /**
+   * The users to unassign, resolved against the task's *current assignees* rather than the
+   * project's members — which is both narrower and wider than the member listing, and correct on
+   * both counts: someone who left the project is still assigned and must stay removable, while
+   * someone who never was assigned must not be silently "unassigned".
+   *
+   * That second half is the whole point. `DELETE /tasks/{t}/assignees/{u}` is a bare delete: it
+   * never checks that the assignment existed and answers 200 either way, so without this refusal
+   * a typo comes back as a cheerful success and an unchanged task. The message names who *is*
+   * assigned, so the caller can correct itself without a second read.
+   *
+   * Synchronous, and the only resolver method that is: the candidate set arrives with the task
+   * the caller already read, so there is nothing to fetch.
+   */
+  resolveUnassigneeIds(assigned: readonly RawUser[], users: readonly UserRef[]): number[] {
+    if (users.length === 0) {
+      return [];
+    }
+
+    if (assigned.length === 0) {
+      throw new Error("This task has no assignees, so there is nothing to unassign.");
+    }
+
+    const ids = new Set<number>();
+
+    for (const user of users) {
+      ids.add(
+        typeof user === "number"
+          ? assignedById(assigned, user)
+          : assignedByUsername(assigned, user),
+      );
+    }
+
+    return [...ids];
+  }
+
+  /**
    * A project's kanban view: the first by display order, with the mode that decides whether a
    * task moves by a bucket operation (`manual`) or by changing the fields its column filters on
    * (`filter`). A project can hold several kanban views; taking the first by `position` is
@@ -690,6 +799,73 @@ function namedInBothError(named: string): Error {
   return new Error(
     `Named in both add and remove: ${named}. A label cannot be added and removed in the same call, and which one wins is not something to guess at — name it on one side only.`,
   );
+}
+
+/** Everyone currently assigned, as the error messages name them: `alice (id 3)`. */
+function describeAssignees(assigned: readonly RawUser[]): string {
+  return assigned.map((user) => `${user.username} (id ${user.id})`).join(", ");
+}
+
+/**
+ * The one username match, or an error. Shared by both directions so that "which of these people
+ * did you mean" reads the same whether the candidates are project members or task assignees.
+ *
+ * Case-insensitive, because the UI shows one casing and an agent will type another — and for
+ * exactly that reason it can match two users at once: username uniqueness is a DB index, and on
+ * SQLite the comparison is case-sensitive, so `Alice` and `alice` coexist. Both ids are reported
+ * rather than one of them chosen.
+ */
+function userByUsername(candidates: readonly RawUser[], username: string, missing: string): number {
+  const wanted = username.trim().toLowerCase();
+
+  if (wanted === "") {
+    throw new Error('A user is named by their username, e.g. "alice", or by their global id.');
+  }
+
+  const [match, ...rest] = candidates.filter(
+    (user) => user.username.trim().toLowerCase() === wanted,
+  );
+
+  if (match === undefined) {
+    throw new Error(missing);
+  }
+
+  if (rest.length > 0) {
+    const ids = [match, ...rest].map((user) => user.id).join(", ");
+    throw new Error(
+      `The username "${username}" belongs to ${rest.length + 1} users (ids ${ids}), so it does not name one. Pass the id of the user you mean instead of the username.`,
+    );
+  }
+
+  return match.id;
+}
+
+function memberByUsername(members: readonly RawUser[], username: string): number {
+  return userByUsername(
+    members,
+    username,
+    `No member of this project is called "${username}". List its members with vikunja_list_members to see who can be assigned, or pass a global user id if you have one.`,
+  );
+}
+
+function assignedByUsername(assigned: readonly RawUser[], username: string): number {
+  return userByUsername(
+    assigned,
+    username,
+    `"${username}" is not assigned to this task, so there is nothing to remove. Assigned: ${describeAssignees(assigned)}.`,
+  );
+}
+
+function assignedById(assigned: readonly RawUser[], id: number): number {
+  const user = assigned.find((candidate) => candidate.id === id);
+
+  if (user === undefined) {
+    throw new Error(
+      `No user with id ${id} is assigned to this task, so there is nothing to remove. Assigned: ${describeAssignees(assigned)}.`,
+    );
+  }
+
+  return user.id;
 }
 
 function labelById(known: readonly RawLabel[], id: number): number {

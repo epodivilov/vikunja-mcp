@@ -14,10 +14,12 @@ import type {
   LeanProject,
   LeanTask,
   LeanTaskDetail,
+  LeanUser,
   RawBucket,
   RawLabel,
   RawProject,
   RawTask,
+  RawUser,
   TaskFields,
   TaskWrite,
 } from "./types.js";
@@ -134,6 +136,25 @@ export function toLeanLabel(raw: RawLabel): LeanLabel {
   return { id: raw.id, title: raw.title };
 }
 
+/**
+ * A user, stripped to what an agent can act on: the username it addresses one by, the id that
+ * disambiguates a shared spelling, and a display name when there is one.
+ *
+ * Field by field rather than by spread, deliberately. The raw object carries an email — blank on
+ * the members listing, populated elsewhere — and a spread would hand it to the model the moment
+ * this function is reused on a payload where the server fills it in.
+ */
+export function toLeanUser(raw: RawUser): LeanUser {
+  const user: LeanUser = { id: raw.id, username: raw.username };
+
+  // `""` is how Vikunja stores "no display name"; it is noise in an answer, not information.
+  if (raw.name.trim() !== "") {
+    user.name = raw.name;
+  }
+
+  return user;
+}
+
 export function toLeanProject(raw: RawProject): LeanProject {
   const project: LeanProject = { key: raw.identifier, id: raw.id, title: raw.title };
 
@@ -163,6 +184,13 @@ export function toLeanTask(raw: RawTask): LeanTask {
   const due = nullableDate(raw.due_date);
   if (due) {
     task.due = due;
+  }
+
+  // Absent rather than empty, like every other optional field here: most tasks have no assignee,
+  // and `"assignees":[]` on every row of a listing is a cost with no information in it.
+  const assignees = (raw.assignees ?? []).map((user) => user.username);
+  if (assignees.length > 0) {
+    task.assignees = assignees;
   }
 
   return task;

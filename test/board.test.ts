@@ -35,6 +35,7 @@ function rawTask(id: number, projectId: number, index: number, identifier: strin
     priority: 0,
     due_date: "0001-01-01T00:00:00Z",
     labels: null,
+    assignees: null,
   };
 }
 

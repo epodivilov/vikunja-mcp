@@ -347,6 +347,7 @@ describe("client transport: kanban board", () => {
       priority: 0,
       due_date: "0001-01-01T00:00:00Z",
       labels: null,
+      assignees: null,
     };
   }
 
@@ -512,6 +513,166 @@ describe("client transport: task labels", () => {
   });
 });
 
+describe("client transport: assignees", () => {
+  it("R1: addTaskAssignee PUTs { user_id } to the task's assignees endpoint", async () => {
+    const { fetch, calls } = stubFetch(() => new Response("", { status: 201 }));
+
+    await new VikunjaClient(config, { fetch }).addTaskAssignee(7, 3);
+
+    assert.equal(calls.length, 1, "one assignment is one request");
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "PUT");
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/7/assignees");
+    assert.deepEqual(call.body, { user_id: 3 });
+  });
+
+  it("R2: removeTaskAssignee DELETEs the user's own path, with no body", async () => {
+    const { fetch, calls } = stubFetch(() => new Response("", { status: 200 }));
+
+    await new VikunjaClient(config, { fetch }).removeTaskAssignee(7, 3);
+
+    assert.equal(calls.length, 1);
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "DELETE");
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/7/assignees/3");
+    assert.equal(call.body, undefined, "the user is named by the path, so nothing is sent");
+  });
+
+  it("R1: addTaskAssignees writes each user in turn, one request apiece", async () => {
+    const { fetch, calls } = stubFetch(() => new Response("", { status: 201 }));
+
+    await new VikunjaClient(config, { fetch }).addTaskAssignees(7, [3, 5]);
+
+    assert.deepEqual(
+      calls.map((call) => call.body),
+      [{ user_id: 3 }, { user_id: 5 }],
+    );
+  });
+
+  it("R1: a refusal after an earlier write landed names what is already assigned", async () => {
+    // The refusal cannot be pre-empted: a user id is deliberately not gated on the member
+    // listing, so the first anyone hears of it is the 403. What must not happen is reporting
+    // that as a plain failure — the earlier assignment is on the task and stays there.
+    const { fetch, calls } = stubFetch((call) => {
+      const { user_id: userId } = call.body as { user_id: number };
+      return userId === 9
+        ? new Response(JSON.stringify({ code: 7003, message: "You don't have the right" }), {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          })
+        : new Response("", { status: 201 });
+    });
+
+    await assert.rejects(
+      () => new VikunjaClient(config, { fetch }).addTaskAssignees(7, [5, 9]),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /user 5/, "names the assignment that landed");
+        assert.match(error.message, /7003/, "keeps the server's own refusal verbatim");
+        assert.ok(error.cause instanceof VikunjaHttpError, "the server's error stays reachable");
+        return true;
+      },
+    );
+
+    assert.equal(calls.length, 2, "stopped at the refusal rather than writing on");
+  });
+
+  it("R1: a refusal on the very first write is passed through untouched", async () => {
+    // Nothing landed, so there is nothing to add to the server's own message — and a
+    // half-application note on a call that applied nothing would be its own kind of lie.
+    const { fetch } = stubFetch(
+      () =>
+        new Response(JSON.stringify({ code: 7003, message: "You don't have the right" }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await assert.rejects(
+      () => new VikunjaClient(config, { fetch }).addTaskAssignees(7, [9]),
+      (error: unknown) => {
+        assert.ok(error instanceof VikunjaHttpError, "not reclassified into something else");
+        assert.equal(error.status, 403);
+        assert.doesNotMatch(error.message, /already assigned/, "no partial-application note");
+        return true;
+      },
+    );
+  });
+
+  it("R5: reads an unpaginated projectusers response in a single request", async () => {
+    // The real handler answers `c.JSON(200, users)` — a bare array with no x-pagination-*
+    // headers at all, which `page()` reproduces by omitting the page count.
+    const { fetch, calls } = stubFetch(() =>
+      page([
+        { id: 3, username: "alice", name: "Alice A" },
+        { id: 5, username: "bob", name: "" },
+      ]),
+    );
+
+    const users = await new VikunjaClient(config, { fetch }).listProjectUsers(11);
+
+    assert.equal(calls.length, 1);
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(new URL(call.url).pathname, "/api/v1/projects/11/projectusers");
+    assert.deepEqual(
+      users.map((user) => user.username),
+      ["alice", "bob"],
+    );
+  });
+
+  it("R5: still exhausts pagination if an instance ever reports more than one page", async () => {
+    const { fetch, calls } = stubFetch((call) => {
+      const pageNumber = Number(new URL(call.url).searchParams.get("page"));
+      return page([{ id: pageNumber, username: `user${pageNumber}`, name: "" }], 2);
+    });
+
+    const users = await new VikunjaClient(config, { fetch }).listProjectUsers(11);
+
+    assert.deepEqual(
+      calls.map((call) => new URL(call.url).searchParams.get("page")),
+      ["1", "2"],
+    );
+    assert.deepEqual(
+      users.map((user) => user.username),
+      ["user1", "user2"],
+      "a paginating server is walked, not truncated at page 1",
+    );
+  });
+
+  it("R7: createTask carries assignees as id objects alongside the other fields", async () => {
+    const { fetch, calls } = stubFetch(() => jsonObject({ id: 601 }));
+
+    await new VikunjaClient(config, { fetch }).createTask(
+      11,
+      { title: "Ship it", description: "<p>body</p>" },
+      [3, 5],
+    );
+
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "PUT");
+    assert.equal(new URL(call.url).pathname, "/api/v1/projects/11/tasks");
+    assert.deepEqual(call.body, {
+      title: "Ship it",
+      description: "<p>body</p>",
+      assignees: [{ id: 3 }, { id: 5 }],
+    });
+  });
+
+  it("R7: createTask sends no assignees key when the call names none", async () => {
+    const { fetch, calls } = stubFetch(() => jsonObject({ id: 601 }));
+
+    await new VikunjaClient(config, { fetch }).createTask(11, { title: "Ship it" });
+
+    const [call] = calls;
+    assert.ok(call);
+    assert.deepEqual(call.body, { title: "Ship it" });
+  });
+});
+
 describe("client transport: read-modify-write", () => {
   it("R7: updateTask preserves the fields the patch omits", async () => {
     const current: RawTask = {
@@ -525,6 +686,7 @@ describe("client transport: read-modify-write", () => {
       index: 1,
       identifier: "VMCP-1",
       labels: null,
+      assignees: [{ id: 3, username: "alice", name: "Alice A" }],
     };
 
     const { fetch, calls } = stubFetch((call) => {
@@ -552,6 +714,9 @@ describe("client transport: read-modify-write", () => {
     assert.equal(body.priority, current.priority, "priority preserved");
     assert.equal(body.due_date, current.due_date, "due_date preserved");
     assert.equal(body.title, current.title, "title preserved");
+    // `POST /tasks/{id}` replaces assignees wholesale from its payload, so echoing the server's
+    // own list back is the only reason an update does not silently unassign everyone.
+    assert.deepEqual(body.assignees, current.assignees, "assignees preserved");
   });
 });
 

@@ -13,7 +13,7 @@ import {
   parseProjectKey,
   parseTaskRef,
 } from "../src/resolver.ts";
-import type { RawBucket, RawLabel, RawProject, RawTask, RawView } from "../src/types.ts";
+import type { RawBucket, RawLabel, RawProject, RawTask, RawUser, RawView } from "../src/types.ts";
 
 function project(id: number, identifier: string, isArchived = false): RawProject {
   return { id, title: `Project ${id}`, identifier, description: "", is_archived: isArchived };
@@ -31,7 +31,12 @@ function task(id: number, projectId: number, index: number): RawTask {
     priority: 0,
     due_date: "0001-01-01T00:00:00Z",
     labels: null,
+    assignees: null,
   };
+}
+
+function user(id: number, username: string, name = ""): RawUser {
+  return { id, username, name };
 }
 
 interface StubOptions {
@@ -47,14 +52,16 @@ interface StubOptions {
   views?: RawView[];
   /** A manual view's buckets, for the column-name lookup. */
   buckets?: RawBucket[];
+  /** The project's assignable members. Usernames collide case-insensitively on SQLite. */
+  members?: RawUser[];
 }
 
 interface Stub extends ResolverClient {
-  calls: { listProjects: number; listLabels: number; filters: string[] };
+  calls: { listProjects: number; listLabels: number; listProjectUsers: number; filters: string[] };
 }
 
 function stubClient(projects: RawProject[], tasks: RawTask[], options: StubOptions = {}): Stub {
-  const calls = { listProjects: 0, listLabels: 0, filters: [] as string[] };
+  const calls = { listProjects: 0, listLabels: 0, listProjectUsers: 0, filters: [] as string[] };
   let failures = options.failures ?? 0;
 
   return {
@@ -65,6 +72,10 @@ function stubClient(projects: RawProject[], tasks: RawTask[], options: StubOptio
     },
     listViews: async () => options.views ?? [],
     listBuckets: async () => options.buckets ?? [],
+    listProjectUsers: async () => {
+      calls.listProjectUsers++;
+      return options.members ?? [];
+    },
     listProjects: async () => {
       calls.listProjects++;
       if (failures > 0) {
@@ -701,5 +712,136 @@ describe("Resolver.resolveBucketId", () => {
         return true;
       },
     );
+  });
+});
+
+describe("Resolver.resolveAssigneeIds", () => {
+  const ALICE = user(3, "alice", "Alice A");
+  const BOB = user(5, "bob");
+  const MEMBERS = [ALICE, BOB];
+
+  function memberStub(members: RawUser[] = MEMBERS): Stub {
+    return stubClient(PROJECTS, TASKS, { members });
+  }
+
+  it("R3: maps a username to its id, case-insensitively", async () => {
+    assert.deepEqual(await new Resolver(memberStub()).resolveAssigneeIds(11, [], ["ALICE"]), [3]);
+  });
+
+  it("R3: reports a username no member carries, pointing at the member listing", async () => {
+    await assert.rejects(
+      () => new Resolver(memberStub()).resolveAssigneeIds(11, [], ["carol"]),
+      /No member of this project is called "carol".*vikunja_list_members/s,
+    );
+  });
+
+  it("R3: refuses usernames that differ only in case, naming both ids, for either spelling", async () => {
+    const collide = memberStub([user(3, "alice"), user(4, "Alice")]);
+
+    for (const spelling of ["alice", "ALICE", "Alice"]) {
+      await assert.rejects(
+        () => new Resolver(collide).resolveAssigneeIds(11, [], [spelling]),
+        /belongs to 2 users \(ids 3, 4\)/,
+        `resolved ${spelling} instead of reporting the collision`,
+      );
+    }
+  });
+
+  it("R3: collapses the same user named by username and by id", async () => {
+    assert.deepEqual(
+      await new Resolver(memberStub()).resolveAssigneeIds(11, [], ["alice", 3]),
+      [3],
+    );
+  });
+
+  it("R3: passes an id through without gating it on the member listing", async () => {
+    // Upstream's own listing has a hole — the owner of a parent project may be assigned but is
+    // not listed — so gating an id here would be stricter than the server. Its access check is
+    // the server's to make.
+    const client = memberStub();
+
+    assert.deepEqual(await new Resolver(client).resolveAssigneeIds(11, [], [9]), [9]);
+    assert.equal(client.calls.listProjectUsers, 0, "no listing was needed to pass an id through");
+  });
+
+  it("R1: writes nothing for a user already assigned, whatever the spelling", async () => {
+    const ids = await new Resolver(memberStub()).resolveAssigneeIds(11, [ALICE], ["alice", "bob"]);
+
+    assert.deepEqual(ids, [5], "alice is already assigned, so only bob has to be written");
+  });
+
+  it("R1: skips an already-assigned user named by id, so the skip is on the id", async () => {
+    assert.deepEqual(await new Resolver(memberStub()).resolveAssigneeIds(11, [ALICE], [3]), []);
+  });
+
+  it("does not list members when the call names nobody", async () => {
+    const client = memberStub();
+
+    assert.deepEqual(await new Resolver(client).resolveAssigneeIds(11, [], []), []);
+    assert.equal(client.calls.listProjectUsers, 0);
+  });
+
+  it("lists members once however many usernames a call carries", async () => {
+    const client = memberStub();
+
+    await new Resolver(client).resolveAssigneeIds(11, [], ["alice", "bob"]);
+
+    assert.equal(client.calls.listProjectUsers, 1);
+  });
+});
+
+describe("Resolver.resolveUnassigneeIds", () => {
+  const ALICE = user(3, "alice", "Alice A");
+  const BOB = user(5, "bob");
+
+  function resolver(members: RawUser[] = [ALICE, BOB]): Resolver {
+    return new Resolver(stubClient(PROJECTS, TASKS, { members }));
+  }
+
+  it("R3: maps an assigned username to its id, case-insensitively", () => {
+    assert.deepEqual(resolver().resolveUnassigneeIds([ALICE, BOB], ["ALICE"]), [3]);
+  });
+
+  it("R2: refuses a user who is not assigned, naming who is", () => {
+    assert.throws(
+      () => resolver().resolveUnassigneeIds([ALICE], ["bob"]),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /"bob" is not assigned/);
+        assert.match(error.message, /alice/, "names who is assigned instead of reporting success");
+        return true;
+      },
+    );
+  });
+
+  it("R3: refuses an id that is not assigned, and resolves one that is", () => {
+    assert.throws(() => resolver().resolveUnassigneeIds([ALICE], [9]), /alice/);
+    assert.deepEqual(resolver().resolveUnassigneeIds([ALICE], [3]), [3]);
+  });
+
+  it("R2: resolves an assignee who is no longer a project member", () => {
+    // The candidate set is the task's own assignees, so an ex-member stays removable — and no
+    // member listing is consulted at all.
+    const client = stubClient(PROJECTS, TASKS, { members: [BOB] });
+
+    assert.deepEqual(new Resolver(client).resolveUnassigneeIds([ALICE], ["alice"]), [3]);
+    assert.equal(client.calls.listProjectUsers, 0);
+  });
+
+  it("R3: refuses two assignees whose usernames differ only in case", () => {
+    const assigned = [user(3, "alice"), user(4, "Alice")];
+
+    assert.throws(
+      () => resolver().resolveUnassigneeIds(assigned, ["alice"]),
+      /belongs to 2 users \(ids 3, 4\)/,
+    );
+  });
+
+  it("collapses the same user named twice", () => {
+    assert.deepEqual(resolver().resolveUnassigneeIds([ALICE], ["alice", 3, " ALICE "]), [3]);
+  });
+
+  it("R2: says so when the task has no assignees at all", () => {
+    assert.throws(() => resolver().resolveUnassigneeIds([], ["alice"]), /no assignees/);
   });
 });

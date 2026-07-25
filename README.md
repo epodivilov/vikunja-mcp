@@ -53,16 +53,19 @@ Read (safe to allow-list):
 - `vikunja_get_task` — by key (`INFRA-41`) or explicit global id
 - `vikunja_list_labels`
 - `vikunja_get_board` — a project's kanban board as ordered columns of lean tasks, plus its mode
+- `vikunja_list_members` — the users a project's tasks can be assigned to
 
 Write (keep gated):
 
-- `vikunja_create_task`
+- `vikunja_create_task` — optionally assigned to people as it is created
 - `vikunja_update_task`
 - `vikunja_complete_task`
 - `vikunja_comment_task`
 - `vikunja_move_task` — move a task into a named column on a manual-bucket board
 - `vikunja_label_task` — add and/or remove labels on a task, leaving the rest alone
 - `vikunja_set_task_labels` — replace a task's whole label set; an empty list clears it
+- `vikunja_assign_task` — assign users by username, keeping whoever is already assigned
+- `vikunja_unassign_task` — remove users from a task
 - `vikunja_delete_task`
 
 Because each operation is its own tool, you can grant read access permanently while still
@@ -76,7 +79,8 @@ reviewing every write:
       "mcp__vikunja__vikunja_list_tasks",
       "mcp__vikunja__vikunja_get_task",
       "mcp__vikunja__vikunja_list_labels",
-      "mcp__vikunja__vikunja_get_board"
+      "mcp__vikunja__vikunja_get_board",
+      "mcp__vikunja__vikunja_list_members"
     ]
   }
 }
