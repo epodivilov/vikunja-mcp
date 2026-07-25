@@ -10,10 +10,12 @@ import { registerCreateTaskTool } from "./tools/create-task.js";
 import { registerDeleteTaskTool } from "./tools/delete-task.js";
 import { registerGetBoardTool } from "./tools/get-board.js";
 import { registerGetTaskTool } from "./tools/get-task.js";
+import { registerLabelTaskTool } from "./tools/label-task.js";
 import { registerListLabelsTool } from "./tools/list-labels.js";
 import { registerListProjectsTool } from "./tools/list-projects.js";
 import { registerListTasksTool } from "./tools/list-tasks.js";
 import { registerMoveTaskTool } from "./tools/move-task.js";
+import { registerSetTaskLabelsTool } from "./tools/set-task-labels.js";
 import { registerUpdateTaskTool } from "./tools/update-task.js";
 
 async function main(): Promise<void> {
@@ -51,6 +53,8 @@ async function main(): Promise<void> {
   registerCompleteTaskTool(server, client, resolver);
   registerCommentTaskTool(server, client, resolver);
   registerMoveTaskTool(server, client, resolver);
+  registerLabelTaskTool(server, client, resolver);
+  registerSetTaskLabelsTool(server, client, resolver);
   registerDeleteTaskTool(server, client, resolver);
 
   const transport = new StdioServerTransport();

@@ -216,6 +216,28 @@ export class VikunjaClient {
     await this.#request<unknown>("PUT", `/tasks/${taskId}/labels`, { body: { label_id: labelId } });
   }
 
+  /**
+   * Reconciles a task's labels to exactly `labelIds`, in one request and one transaction.
+   *
+   * `UpdateTaskLabels` deletes the labels not passed, adds the ones missing, and does both inside
+   * the session `db.NewSession()` opens — so a bad id in the list rolls the deletes back too, and
+   * there is no observable intermediate state. That is what makes this the whole of a label
+   * change rather than a step in one: adds and removes land together, and re-adding a label the
+   * task already has (or removing one it does not) is not an error, because the endpoint
+   * reconciles by set membership rather than by operation.
+   *
+   * An empty list is the documented way to clear every label — there is an explicit branch for
+   * it — so it is sent as a request rather than optimised away.
+   *
+   * The 201 body is not the result: it echoes the label array it was handed, not what the server
+   * stored. Callers that need the outcome read the task back.
+   */
+  async setTaskLabels(taskId: number, labelIds: readonly number[]): Promise<void> {
+    await this.#request<unknown>("POST", `/tasks/${taskId}/labels/bulk`, {
+      body: { labels: labelIds.map((id) => ({ id })) },
+    });
+  }
+
   // --- kanban board -----------------------------------------------------------
 
   /**
