@@ -16,6 +16,7 @@ import type {
   RawTask,
   RawUser,
   RawView,
+  TaskRefLookup,
 } from "./types.js";
 
 /**
@@ -74,6 +75,8 @@ export interface TaskRef {
 interface ProjectEntry {
   id: number;
   archived: boolean;
+  /** Key prefix as Vikunja stores it, `""` for a project that has none. */
+  identifier: string;
 }
 
 /**
@@ -328,6 +331,39 @@ export class Resolver {
     }
 
     return match;
+  }
+
+  /**
+   * A way to key the tasks of `projectIds` — the projects a task's related tasks live in.
+   *
+   * Related tasks arrive embedded in the task being read, with their `identifier` left empty and
+   * possibly a different project each, so their keys have to be assembled from `index` and their
+   * own project's identifier. The projection is pure and cannot ask; this hands it a lookup that
+   * already knows, built from the same `GET /projects` index every key resolves through.
+   *
+   * An id the index has never seen buys the rate-limited reload a missing key does, then falls
+   * back to `#index`. That fallback should be unreachable — a related task belongs to a project
+   * the caller can read, and the index holds every one of those, archived included — so the
+   * point of it is to render an honest "no key" rather than invent one.
+   *
+   * A task with no relations passes nothing and costs nothing: no listing is loaded, and the
+   * lookup it gets back names no project. Reading a task by `{ id }` must not turn into a
+   * project listing just because the projection takes a lookup.
+   */
+  async taskRefLookup(projectIds: Iterable<number>): Promise<TaskRefLookup> {
+    const wanted = new Set(projectIds);
+
+    if (wanted.size === 0) {
+      return (_projectId, taskIndex) => formatRef("", taskIndex);
+    }
+
+    const loaded = await this.#index();
+    const index = [...wanted].every((id) => loaded.byId.has(id))
+      ? loaded
+      : await this.#refresh(loaded);
+
+    return (projectId, taskIndex) =>
+      formatRef(index.byId.get(projectId)?.identifier ?? "", taskIndex);
   }
 
   /**
@@ -676,7 +712,11 @@ export class Resolver {
     const byId = new Map<number, ProjectEntry>();
 
     for (const project of await this.#client.listProjects()) {
-      const entry: ProjectEntry = { id: project.id, archived: project.is_archived };
+      const entry: ProjectEntry = {
+        id: project.id,
+        archived: project.is_archived,
+        identifier: project.identifier,
+      };
 
       // Indexed by id before the key check, deliberately: a project with no identifier is
       // exactly the one a caller has to address by id, so it must be in this map even though

@@ -673,6 +673,60 @@ describe("client transport: assignees", () => {
   });
 });
 
+describe("client transport: task relations", () => {
+  it("R1: relates two tasks with one PUT carrying other_task_id and relation_kind", async () => {
+    const { fetch, calls } = stubFetch(() => new Response("", { status: 201 }));
+
+    await new VikunjaClient(config, { fetch }).createRelation(530, 600, "blocking");
+
+    assert.equal(calls.length, 1, "the inverse relation is the server's write, not a second one");
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "PUT");
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/530/relations");
+    assert.deepEqual(call.body, { other_task_id: 600, relation_kind: "blocking" });
+  });
+
+  it("R4: surfaces Vikunja's refusal with its status and code rather than reporting success", async () => {
+    // 4010 is ErrCodeRelationTasksCannotBeTheSame; an already-existing relation (4008) and a
+    // subtask cycle (4023) arrive the same way, and none of them may be swallowed. The numbers
+    // are read off `error.go` at v2.3.0 rather than guessed: the neighbouring 400x codes belong
+    // to unrelated task errors, so a fixture carrying a plausible-looking wrong one would teach
+    // the next reader a pairing that does not exist.
+    const { fetch } = stubFetch(
+      () =>
+        new Response(JSON.stringify({ code: 4010, message: "cannot relate a task to itself" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await assert.rejects(
+      new VikunjaClient(config, { fetch }).createRelation(530, 530, "related"),
+      (error: unknown) => {
+        assert.ok(error instanceof VikunjaHttpError);
+        assert.equal(error.status, 400);
+        assert.equal(error.code, 4010);
+        assert.match(error.message, /cannot relate a task to itself/);
+        return true;
+      },
+    );
+  });
+
+  it("R5: unrelates with a DELETE that puts the kind and the other task in the path", async () => {
+    const { fetch, calls } = stubFetch(() => new Response(null, { status: 204 }));
+
+    await new VikunjaClient(config, { fetch }).deleteRelation(530, "blocking", 600);
+
+    assert.equal(calls.length, 1);
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "DELETE");
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/530/relations/blocking/600");
+    assert.equal(call.body, undefined, "the kind travels in the path, not in a body");
+  });
+});
+
 describe("client transport: read-modify-write", () => {
   it("R7: updateTask preserves the fields the patch omits", async () => {
     const current: RawTask = {

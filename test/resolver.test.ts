@@ -423,6 +423,75 @@ describe("Resolver", () => {
   });
 });
 
+describe("Resolver.taskRefLookup", () => {
+  it("R6: builds a related task's key from its own project's identifier", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    const refOf = await new Resolver(client).taskRefLookup([7, 11]);
+
+    assert.equal(refOf(7, 41), "INFRA-41");
+    assert.equal(refOf(11, 3), "VMCP-3");
+  });
+
+  it("R6: renders #index for a project that has no identifier", async () => {
+    const client = stubClient([project(9, ""), ...PROJECTS], TASKS);
+
+    const refOf = await new Resolver(client).taskRefLookup([9]);
+
+    assert.equal(refOf(9, 5), "#5");
+  });
+
+  it("R6: knows an archived project, whose tasks a relation may well point at", async () => {
+    // The index is built from `listProjects`, which asks for archived projects too — a relation
+    // read never touches `GET /tasks`, so the archive blindness that affects listings does not
+    // reach this path and the key comes out right.
+    const client = stubClient([project(20, "OLD", true), ...PROJECTS], TASKS);
+
+    const refOf = await new Resolver(client).taskRefLookup([20]);
+
+    assert.equal(refOf(20, 1), "OLD-1");
+  });
+
+  it("R6: reloads once for a project id the index does not know, picking up one created since", async () => {
+    const projects = [...PROJECTS];
+    const client = stubClient(projects, TASKS, {});
+    const resolver = new Resolver(client, ALWAYS_RELOAD);
+
+    await resolver.resolveTask("INFRA-41");
+    projects.push(project(12, "NEW"));
+
+    assert.equal((await resolver.taskRefLookup([12]))(12, 7), "NEW-7");
+    assert.equal(client.calls.listProjects, 2);
+  });
+
+  it("R6: falls back to #index for an id no reload explains, rather than inventing a key", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    const refOf = await new Resolver(client, ALWAYS_RELOAD).taskRefLookup([404]);
+
+    assert.equal(refOf(404, 2), "#2");
+  });
+
+  it("R6: does not list projects at all when a task has no related tasks", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+
+    const refOf = await new Resolver(client).taskRefLookup([]);
+
+    assert.equal(client.calls.listProjects, 0, "a read of a task with no relations costs nothing");
+    assert.equal(refOf(7, 41), "#41", "an empty lookup names no project rather than guessing");
+  });
+
+  it("R6: does not re-list for an id that just missed a freshly loaded index", async () => {
+    const client = stubClient(PROJECTS, TASKS);
+    const resolver = new Resolver(client);
+
+    await resolver.resolveTask("INFRA-41");
+    await resolver.taskRefLookup([404]);
+
+    assert.equal(client.calls.listProjects, 1);
+  });
+});
+
 describe("Resolver.resolveLabelIds", () => {
   const LABELS: RawLabel[] = [
     { id: 1, title: "feature" },

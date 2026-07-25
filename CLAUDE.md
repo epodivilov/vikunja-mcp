@@ -54,7 +54,7 @@ primary reason this project exists.
 |------|------|-------|
 | `vikunja_list_projects` | read | keys + titles only |
 | `vikunja_list_tasks` | read | filters: project, done, search; lean rows |
-| `vikunja_get_task` | read | input: key (`INFRA-41`) or `{ id }` |
+| `vikunja_get_task` | read | input: key (`INFRA-41`) or `{ id }`; carries the task's relations as lean refs |
 | `vikunja_list_labels` | read | for label mapping |
 | `vikunja_get_board` | read | project's kanban board as ordered columns of lean tasks + mode; reads the per-view kanban endpoint, both board modes |
 | `vikunja_list_members` | read | users a project can assign to, as `{ id, username, name? }`; never an email |
@@ -67,6 +67,8 @@ primary reason this project exists.
 | `vikunja_set_task_labels` | write | replace a task's whole label set; `[]` clears it. Split from the above so the wholesale replace can be denied on its own |
 | `vikunja_assign_task` | write | additive; already-assigned users produce no write |
 | `vikunja_unassign_task` | write | refuses a user who is not assigned — the server would not |
+| `vikunja_relate_tasks` | write | relate two tasks by key under one of Vikunja's 11 kinds; the server writes the inverse |
+| `vikunja_unrelate_tasks` | write | remove one relation of a named kind; the server drops both directions |
 | `vikunja_delete_task` | write | isolated so it can be denied on its own |
 
 ## Invariants
@@ -247,6 +249,46 @@ collapse the whole key-resolution dance below into one request.)
 - **API-token scopes.** These routes group as `tasks_assignees` (create / delete / read_all) and
   `projects` -> `projectusers`. A token minted before this feature existed may lack them and
   answer 403; that is deployment configuration, not a code defect — re-mint the token.
+- **Relations are one write, both directions.** `PUT /tasks/{id}/relations` with
+  `{ other_task_id, relation_kind }` inserts `(t, o, kind)` *and* `(o, t, inverse(kind))` in the
+  same call (`task_relation.go`), so never issue a second write for the inverse — it would earn
+  the "relation already exists" refusal (code 4008). `DELETE
+  /tasks/{id}/relations/{kind}/{other}` likewise removes both rows. The kind and the other task
+  travel in the DELETE path; the PUT body is snake_case.
+- **Relation error codes, read off `error.go` at v2.3.0** — check them there before branching on
+  one, because the 400x range is shared with task errors that have nothing to do with relations,
+  and an off-by-a-few code silently names a different failure: `4007`
+  `ErrCodeInvalidRelationKind`, `4008` `ErrCodeRelationAlreadyExists`, `4009`
+  `ErrCodeRelationDoesNotExist` (what unrelating a relation that is not there produces), `4010`
+  `ErrCodeRelationTasksCannotBeTheSame`, `4023` `ErrCodeTaskRelationCycle`. For contrast, the
+  neighbours a plausible guess lands on: `4001` is `ErrCodeTaskCannotBeEmpty`, `4004`
+  `ErrCodeBulkTasksNeedAtLeastOne`, `4005` `ErrCodeNoRightToSeeTask`.
+- The kind vocabulary is 11 strings — `subtask`/`parenttask`, `blocking`/`blocked`,
+  `precedes`/`follows`, `duplicateof`/`duplicates`, `copiedfrom`/`copiedto`, `related` — paired
+  as their own inverses. `unknown` exists as a Go constant but `RelationKind.isValid()` rejects
+  it, so it is not offered. Direction is the named task's: `relate(A, blocking, B)` records that
+  A blocks B.
+- **The relation checks live in the permission layer, not in `Create`.** `TaskRelation.CanCreate`
+  (`task_relation_permissions.go`) is what rejects an unknown kind and what loads the other task
+  and requires `CanRead` on it — note read, not write. `Create` itself does neither, so reading
+  only `Create` misleads. We still validate the kind client-side and resolve both keys to ids
+  first: a specific error beats a 400, and it costs no round trip.
+- **Embedded related tasks have an empty `identifier`.** `setIdentifier` runs on the task being
+  read and never on the rows inside `related_tasks` (`otherTask` is `copier.Copy`'d), so a
+  related task's key must be rebuilt from its `index` plus *its own* project's identifier — it
+  may live in another project, archived included. The identifier for that comes from
+  `resolver.taskRefLookup`, which answers out of the `GET /projects` index and therefore knows
+  archived projects too: the archive blindness of `GET /tasks` constrains which *named* task can
+  be resolved by key, not which project a related task's key can be built from.
+- **Both read paths embed relations**, so the key path is not the poor relation of the id one.
+  `GET /tasks/{id}` populates `related_tasks`, and so does the `GET /tasks` collection that
+  `resolver.resolveTask` resolves a key through (`ReadAll` -> `getTasksForProjects` ->
+  `addMoreInfoToTasks` -> `addRelatedTasksToTasks`; `tasks.go` initializes the map, so a
+  collection row carries at least `{}`).
+- `related_tasks` empty comes in three shapes: absent, `null` (a nil Go map) and `{}`. It is also
+  `xorm:"-"`, hence ignored on writes — which is why the read-modify-write in `client.updateTask`
+  can spread it into the update body harmlessly. Relations must never be sent through a task
+  write.
 
 ## Releasing
 
@@ -280,6 +322,20 @@ Tests live in `test/`, not `src/` — `src` is the build root and `files: ["dist
 them. They run through `node --test` on the TypeScript directly, so **development needs Node
 22.6+** even though the shipped code still supports the `engines` floor of 20. `tsc` does not
 typecheck `test/` (`include: ["src"]`); Biome still lints it.
+
+Running the TypeScript directly, **combined with this repo's `.js`-specifier import convention**,
+has one consequence worth knowing before moving code: the type-stripping loader does not resolve
+`./projection.js` to `projection.ts`, so a `src` module that imports another one's **value**
+cannot be loaded by a test — and neither can any test that imports it, transitively. That is why
+`src/tools/*` is untestable (every tool imports `projection`/`result` for real) while `client`,
+`resolver`, `projection` and `types` are not: they import each other for types only, and a type
+import is erased. Until that changes, a shared runtime constant belongs in `types.ts`, which
+nothing imports for values.
+
+It is a convention, not a law: TypeScript's `rewriteRelativeImportExtensions` (5.7+, and 5.9 is
+what is installed) would let `src` import by `.ts` specifier and still emit `.js`, which would
+make the tool files importable and testable. That is a repo-wide change and belongs to its own
+task — do not do it as a side effect of something else.
 
 `projection.ts` is pure, so its edge cases are cheap to pin. Anything learned about the live
 server's actual shapes belongs in `test/projection.test.ts` as a case, not in a commit message.

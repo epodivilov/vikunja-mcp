@@ -17,8 +17,10 @@ import { registerListMembersTool } from "./tools/list-members.js";
 import { registerListProjectsTool } from "./tools/list-projects.js";
 import { registerListTasksTool } from "./tools/list-tasks.js";
 import { registerMoveTaskTool } from "./tools/move-task.js";
+import { registerRelateTasksTool } from "./tools/relate-tasks.js";
 import { registerSetTaskLabelsTool } from "./tools/set-task-labels.js";
 import { registerUnassignTaskTool } from "./tools/unassign-task.js";
+import { registerUnrelateTasksTool } from "./tools/unrelate-tasks.js";
 import { registerUpdateTaskTool } from "./tools/update-task.js";
 
 async function main(): Promise<void> {
@@ -61,6 +63,8 @@ async function main(): Promise<void> {
   registerSetTaskLabelsTool(server, client, resolver);
   registerAssignTaskTool(server, client, resolver);
   registerUnassignTaskTool(server, client, resolver);
+  registerRelateTasksTool(server, client, resolver);
+  registerUnrelateTasksTool(server, client, resolver);
   registerDeleteTaskTool(server, client, resolver);
 
   const transport = new StdioServerTransport();
