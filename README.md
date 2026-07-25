@@ -54,13 +54,16 @@ Read (safe to allow-list):
 - `vikunja_list_labels`
 - `vikunja_get_board` — a project's kanban board as ordered columns of lean tasks, plus its mode
 - `vikunja_list_members` — the users a project's tasks can be assigned to
+- `vikunja_list_comments` — a task's comments, bodies as markdown and the author as a username
+- `vikunja_get_comment` — one comment, by task plus its numeric `commentId`
 
 Write (keep gated):
 
 - `vikunja_create_task` — optionally assigned to people as it is created
 - `vikunja_update_task`
 - `vikunja_complete_task`
-- `vikunja_comment_task`
+- `vikunja_comment_task` — add a comment, body in markdown
+- `vikunja_update_comment` — replace an existing comment's body
 - `vikunja_move_task` — move a task into a named column on a manual-bucket board
 - `vikunja_label_task` — add and/or remove labels on a task, leaving the rest alone
 - `vikunja_set_task_labels` — replace a task's whole label set; an empty list clears it
@@ -69,6 +72,7 @@ Write (keep gated):
 - `vikunja_relate_tasks` — record that one task blocks, precedes, duplicates or parents another
 - `vikunja_unrelate_tasks` — remove one such relation
 - `vikunja_delete_task`
+- `vikunja_delete_comment`
 
 Because each operation is its own tool, you can grant read access permanently while still
 reviewing every write:
@@ -82,7 +86,9 @@ reviewing every write:
       "mcp__vikunja__vikunja_get_task",
       "mcp__vikunja__vikunja_list_labels",
       "mcp__vikunja__vikunja_get_board",
-      "mcp__vikunja__vikunja_list_members"
+      "mcp__vikunja__vikunja_list_members",
+      "mcp__vikunja__vikunja_list_comments",
+      "mcp__vikunja__vikunja_get_comment"
     ]
   }
 }

@@ -157,6 +157,25 @@ export interface LeanUser {
   name?: string;
 }
 
+/**
+ * One comment on a task. Addressed by `id`: comments have no per-task sequence and therefore no
+ * key of their own, so the "keys, not ids" rule — which is about tasks and projects — does not
+ * reach them.
+ *
+ * `author` is a username and nothing more. Vikunja sends the whole user object (name, email,
+ * avatar settings, timestamps), which is exactly the expanded-owner bloat this server exists to
+ * strip.
+ */
+export interface LeanComment {
+  id: number;
+  /** Markdown, converted from the HTML Vikunja stores. */
+  comment: string;
+  /** The author's username. Omitted when the server reports no usable one. */
+  author?: string;
+  /** RFC3339 timestamp, verbatim as stored — a real date, never Vikunja's zero value. */
+  created: string;
+}
+
 /** Whether a kanban board's columns are hand-managed buckets or synthesized from per-column filters. */
 export type BoardMode = "manual" | "filter";
 
@@ -245,10 +264,25 @@ export interface RawTask {
   related_tasks?: Record<string, RawTask[] | null> | null;
 }
 
+/**
+ * A user as Vikunja expands it inside another object. Only `username` is declared: it is the one
+ * field the projection reads, and the only one allowed past the tool boundary.
+ */
+export interface RawUser {
+  username: string;
+}
+
 export interface RawComment {
   id: number;
-  /** HTML, like task descriptions. */
+  /** HTML, like task descriptions — stored verbatim, converted by nobody. */
   comment: string;
+  /**
+   * The full user object (`author` in the API), or null. The single-comment read always fills it
+   * in; the listing looks each author up by id and leaves the field null when that lookup finds
+   * nobody — a deleted user, or a comment written by a link share.
+   */
+  author: RawUser | null;
+  /** RFC3339, e.g. "2026-07-24T18:21:09.315237Z". A real timestamp, not a nullable zero date. */
   created: string;
 }
 

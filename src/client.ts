@@ -482,6 +482,35 @@ export class VikunjaClient {
     });
   }
 
+  /**
+   * One comment. Both ids are in the path because that is the address: the handler matches the
+   * comment's `task_id` against the one in the URL and answers 404 (code 4015,
+   * `ErrCodeTaskCommentDoesNotExist`) when they disagree — the same answer a comment id that
+   * exists nowhere gets.
+   */
+  getComment(taskId: number, commentId: number): Promise<RawComment> {
+    return this.#requestObject<RawComment>("GET", `/tasks/${taskId}/comments/${commentId}`);
+  }
+
+  /**
+   * Replaces a comment's body. POST because Vikunja's uniform CRUD handler spells Update that
+   * way, the same reason a task update is a POST — but unlike `POST /tasks/{id}`, this one is a
+   * genuine partial write: the handler is `s.ID(...).Cols("comment").Update(tc)` (read out of
+   * `pkg/models/task_comments.go` at v2.3.0), so it touches that single column and nothing else.
+   * Hence no read-modify-write here. The fields it leaves alone — author, created, updated — are
+   * server-managed anyway, so a fixed-column write would cost nothing either.
+   */
+  updateComment(taskId: number, commentId: number, comment: string): Promise<RawComment> {
+    return this.#requestObject<RawComment>("POST", `/tasks/${taskId}/comments/${commentId}`, {
+      body: { comment },
+    });
+  }
+
+  /** Permanent; Vikunja has no trash for comments. Answers an empty body on success. */
+  async deleteComment(taskId: number, commentId: number): Promise<void> {
+    await this.#request<unknown>("DELETE", `/tasks/${taskId}/comments/${commentId}`);
+  }
+
   // --- server info ------------------------------------------------------------
 
   /**
