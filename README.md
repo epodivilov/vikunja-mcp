@@ -63,7 +63,8 @@ Write (keep gated):
 - `vikunja_update_task`
 - `vikunja_complete_task`
 - `vikunja_comment_task` — add a comment, body in markdown
-- `vikunja_update_comment` — replace an existing comment's body
+- `vikunja_update_comment` — replace an existing comment's body; Vikunja permits this only to the
+  comment's own author, whatever your project permissions
 - `vikunja_move_task` — move a task into a named column on a manual-bucket board
 - `vikunja_label_task` — add and/or remove labels on a task, leaving the rest alone
 - `vikunja_set_task_labels` — replace a task's whole label set; an empty list clears it
@@ -72,7 +73,7 @@ Write (keep gated):
 - `vikunja_relate_tasks` — record that one task blocks, precedes, duplicates or parents another
 - `vikunja_unrelate_tasks` — remove one such relation
 - `vikunja_delete_task`
-- `vikunja_delete_comment`
+- `vikunja_delete_comment` — author-only as well
 
 Because each operation is its own tool, you can grant read access permanently while still
 reviewing every write:

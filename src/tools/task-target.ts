@@ -6,7 +6,9 @@
  * The comment tools address a comment the same way plus a numeric `commentId`, so that variant
  * lives here too rather than in one of the four tool files: it is the same contract, and this
  * module — zod and type-only imports, nothing else at runtime — is one of the few under `src/`
- * a test can actually load.
+ * a test can actually load. That last property is why the comment update's body sits here as
+ * well: a `.js` value import of any sibling would make this module unloadable, so everything
+ * that has to be provable is kept in one file with nothing but zod behind it.
  */
 import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
@@ -147,4 +149,43 @@ export async function resolveCommentTarget(
   }
 
   return { task: await resolveTaskTarget(client, resolver, target), commentId };
+}
+
+/** What `applyCommentUpdate` answers with: the comment's id and the task carrying it. */
+export interface UpdatedComment {
+  ref: string;
+  commentId: number;
+}
+
+/**
+ * The whole body of `vikunja_update_comment`: resolve the target, convert the markdown, replace
+ * the stored body, name the task it lives on.
+ *
+ * It lives here rather than inside the tool file for the reason `resolveCommentTarget` does — a
+ * tool file cannot be loaded under `node --test`, so logic left in one is logic nothing can
+ * prove. The conversion is the piece worth proving: Vikunja stores a comment body verbatim, so
+ * an update that forgets it publishes literal `**asterisks**` to the UI and no test would
+ * notice.
+ *
+ * `toHtml` is a parameter instead of an import because importing `../projection.js` here at
+ * runtime would make this module unresolvable to the type-stripping loader and take every test
+ * that touches it down with it. `update-comment.ts` passes the real `markdownToHtml`; that one
+ * binding is the only part of the update path still unpinned, and it is a required argument
+ * rather than an omittable call, so it cannot go missing by accident.
+ */
+export async function applyCommentUpdate(
+  client: VikunjaClient,
+  resolver: Resolver,
+  target: CommentTarget,
+  markdown: string,
+  toHtml: (markdown: string) => string,
+): Promise<UpdatedComment> {
+  const { task, commentId } = await resolveCommentTarget(client, resolver, target);
+
+  await client.updateComment(task.id, commentId, toHtml(markdown));
+
+  // The task's key names where the comment lives, which its id alone cannot say. Read straight
+  // off the task — this is the field `toLeanTask` maps to `ref`, and the task came from a read,
+  // where Vikunja always fills `identifier` in.
+  return { ref: task.identifier, commentId };
 }

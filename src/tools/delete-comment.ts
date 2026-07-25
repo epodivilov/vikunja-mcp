@@ -24,8 +24,10 @@ export function registerDeleteCommentTool(
       title: "Delete task comment",
       description:
         "Permanently deletes one comment from a task. This cannot be undone — to change what a " +
-        "comment says, use vikunja_update_comment instead. Name the task by key (INFRA-41) and " +
-        "the comment by the `id` vikunja_list_comments reports.",
+        "comment says, use vikunja_update_comment instead. Only the comment's author may delete " +
+        "it: write access to the project is not enough, and someone else's comment answers 403 " +
+        "no matter your permissions. Name the task by key (INFRA-41) and the comment by the " +
+        "`id` vikunja_list_comments reports.",
       // Strict: on an irreversible tool, an argument that is not understood is worth an error
       // rather than a guess at what the caller meant.
       inputSchema: z.strictObject({ ...commentTargetShape }),

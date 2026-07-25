@@ -4,19 +4,27 @@
  *
  * Honest about what is and is not covered: `src/tools/*` cannot be imported under `node --test`
  * (they carry `.js` value specifiers the type-stripping loader will not resolve to `.ts`), so the
- * four registration files themselves are unproved here. What IS proved directly is everything
- * they delegate to — `resolveCommentTarget`, which is imported from `src/tools/task-target.ts`
- * for real (that module's only runtime import is zod, so it loads), the client's request shapes
- * and the projection. The `listComments`/`getComment`/`updateComment` helpers below are the tool
- * bodies transcribed: they show the layers fit together, not that a tool file calls them.
+ * four registration files themselves are unproved here — their schemas and annotations with them.
+ * What IS proved directly is everything they delegate to, imported for real from
+ * `src/tools/task-target.ts`, whose only runtime import is zod: `resolveCommentTarget` and
+ * `applyCommentUpdate`, the update tool's entire body including the markdown conversion.
+ *
+ * The two read helpers below (`listComments`, `getComment`) are still transcriptions — those tool
+ * bodies are a resolve, a client call and a projection, each proved on its own elsewhere, so what
+ * these add is only that the layers compose.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { VikunjaClient } from "../src/client.ts";
 import type { Config } from "../src/config.ts";
-import { markdownToHtml, toLeanComment, toLeanTask } from "../src/projection.ts";
+import { markdownToHtml, toLeanComment } from "../src/projection.ts";
 import { Resolver } from "../src/resolver.ts";
-import { resolveCommentTarget, resolveTaskTarget } from "../src/tools/task-target.ts";
+import {
+  type UpdatedComment,
+  applyCommentUpdate,
+  resolveCommentTarget,
+  resolveTaskTarget,
+} from "../src/tools/task-target.ts";
 import type { LeanComment, RawComment, RawProject, RawTask } from "../src/types.ts";
 
 const config: Config = { baseUrl: "http://vikunja.test/api/v1", token: "t0ken" };
@@ -162,17 +170,20 @@ async function getComment(
   return toLeanComment(await client.getComment(target.task.id, target.commentId));
 }
 
-/** The update_comment body: markdown in, HTML on the wire, the task's ref back out. */
-async function updateComment(
+/**
+ * The update_comment body is NOT transcribed: `applyCommentUpdate` is the shipped function the
+ * tool calls, imported here for real. `markdownToHtml` is handed to it exactly as the tool hands
+ * it over — the conversion runs inside the function under test, so dropping it from there fails
+ * these tests instead of quietly shipping literal asterisks.
+ */
+function updateComment(
   client: VikunjaClient,
   resolver: Resolver,
   task: string,
   commentId: number,
   comment: string,
-): Promise<{ ref: string; commentId: number }> {
-  const target = await resolveCommentTarget(client, resolver, { task, commentId });
-  await client.updateComment(target.task.id, target.commentId, markdownToHtml(comment));
-  return { ref: toLeanTask(target.task).ref, commentId: target.commentId };
+): Promise<UpdatedComment> {
+  return applyCommentUpdate(client, resolver, { task, commentId }, comment, markdownToHtml);
 }
 
 describe("list_comments data path", () => {
@@ -228,6 +239,37 @@ describe("update_comment data path", () => {
     assert.equal(post.path, "/api/v1/tasks/600/comments/91");
     assert.deepEqual(post.body, { comment: "<p>Now <strong>edited</strong></p>" });
     assert.deepEqual(answer, { ref: "VMCP-22", commentId: 91 });
+  });
+
+  it("R3: the markdown source is never what gets stored", async () => {
+    // The mutation this exists to catch: an update that forgets the conversion and posts the
+    // body as typed. Vikunja stores it verbatim, so the UI would render "- one" as a literal
+    // dash — the exact bug the conversion exists to prevent, and one no round-trip would reveal.
+    const { client, resolver, calls } = stack();
+
+    await updateComment(client, resolver, "VMCP-22", 91, "- one\n- two");
+
+    const post = calls.find((call) => call.method === "POST");
+    assert.ok(post);
+    const sent = (post.body as { comment: string }).comment;
+    assert.notEqual(sent, "- one\n- two", "the raw markdown never reaches the server");
+    assert.match(sent, /<ul>/);
+  });
+
+  it("R6: refuses an unaddressable target before writing anything", async () => {
+    const { client, resolver, calls } = stack();
+
+    await assert.rejects(
+      applyCommentUpdate(
+        client,
+        resolver,
+        { task: "VMCP-22", id: 600, commentId: 91 },
+        "Now **edited**",
+        markdownToHtml,
+      ),
+      /not both/,
+    );
+    assert.equal(calls.length, 0, "nothing was requested, so nothing was overwritten");
   });
 
   it("R3: raw HTML in the markdown body is escaped, never passed through", async () => {
