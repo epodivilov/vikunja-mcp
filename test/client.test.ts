@@ -727,6 +727,97 @@ describe("client transport: task relations", () => {
   });
 });
 
+describe("client transport: comments", () => {
+  /**
+   * Paths and verbs read out of go-vikunja v2.3.0 `pkg/routes/routes.go`:
+   * `GET|PUT /tasks/:task/comments`, and `GET|POST|DELETE /tasks/:task/comments/:commentid`.
+   * Both ids are in the URL because the handler verifies the comment belongs to that task.
+   */
+  const commentsPath = "/api/v1/tasks/579/comments";
+
+  it("R1: exhausts pagination when listing a task's comments", async () => {
+    const { fetch, calls } = stubFetch((call) => {
+      const pageNumber = Number(new URL(call.url).searchParams.get("page"));
+      return page([{ id: pageNumber, comment: `<p>page ${pageNumber}</p>` }], 2);
+    });
+
+    const comments = await new VikunjaClient(config, { fetch }).listComments(579);
+
+    assert.deepEqual(
+      calls.map((call) => new URL(call.url).pathname),
+      [commentsPath, commentsPath],
+    );
+    assert.deepEqual(
+      comments.map((comment) => comment.id),
+      [1, 2],
+      "both pages, in page order",
+    );
+  });
+
+  it("R2: reads one comment from the per-comment path", async () => {
+    const { fetch, calls } = stubFetch(() =>
+      jsonObject({ id: 91, comment: "<p>Ship it</p>", created: "2026-07-24T18:21:09Z" }),
+    );
+
+    const comment = await new VikunjaClient(config, { fetch }).getComment(579, 91);
+
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "GET");
+    assert.equal(new URL(call.url).pathname, `${commentsPath}/91`);
+    assert.equal(comment.id, 91);
+  });
+
+  it("R2: surfaces a missing comment as VikunjaHttpError", async () => {
+    // 4015 / HTTP 404 is `ErrCodeTaskCommentDoesNotExist` in v2.3.0 `pkg/models/error.go` — the
+    // same answer a comment that belongs to another task gets, since the handler matches task_id.
+    const { fetch } = stubFetch(
+      () =>
+        new Response(JSON.stringify({ code: 4015, message: "This task comment does not exist" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await assert.rejects(
+      new VikunjaClient(config, { fetch }).getComment(579, 91),
+      (error: unknown) => {
+        assert.ok(error instanceof VikunjaHttpError);
+        assert.equal(error.status, 404);
+        assert.equal(error.code, 4015);
+        return true;
+      },
+    );
+  });
+
+  it("R3: updates a comment with a single-field POST and no read-modify-write", async () => {
+    const { fetch, calls } = stubFetch(() =>
+      jsonObject({ id: 91, comment: "<p>Edited</p>", created: "2026-07-24T18:21:09Z" }),
+    );
+
+    await new VikunjaClient(config, { fetch }).updateComment(579, 91, "<p>Edited</p>");
+
+    assert.equal(calls.length, 1, "no read first — Update writes only the `comment` column");
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "POST");
+    assert.equal(new URL(call.url).pathname, `${commentsPath}/91`);
+    assert.deepEqual(call.body, { comment: "<p>Edited</p>" }, "exactly one field on the wire");
+  });
+
+  it("R4: deletes a comment with a DELETE and accepts an empty body", async () => {
+    const { fetch, calls } = stubFetch(() => new Response("", { status: 200 }));
+
+    await new VikunjaClient(config, { fetch }).deleteComment(579, 91);
+
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "DELETE");
+    assert.equal(new URL(call.url).pathname, `${commentsPath}/91`);
+    assert.equal(call.body, undefined, "nothing is sent with the delete");
+  });
+});
+
 describe("client transport: read-modify-write", () => {
   it("R7: updateTask preserves the fields the patch omits", async () => {
     const current: RawTask = {

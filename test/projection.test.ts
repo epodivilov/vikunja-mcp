@@ -13,6 +13,7 @@ import {
   relatedProjectIds,
   toLeanBoard,
   toLeanColumn,
+  toLeanComment,
   toLeanLabel,
   toLeanProject,
   toLeanTask,
@@ -20,7 +21,7 @@ import {
   toLeanUser,
   toTaskWrite,
 } from "../src/projection.ts";
-import type { RawProject, RawTask, RawUser, TaskRefLookup } from "../src/types.ts";
+import type { RawComment, RawProject, RawTask, RawUser, TaskRefLookup } from "../src/types.ts";
 
 /** A task as the API returns it with every optional value unset. */
 const bareTask: RawTask = {
@@ -44,6 +45,32 @@ const bareProject: RawProject = {
   identifier: "INFRA",
   description: "",
   is_archived: false,
+};
+
+/**
+ * A comment as `GET /tasks/{id}/comments/{commentId}` answers it. `author` is a full user
+ * object — the expanded-owner bloat this project exists to strip — and the server also sends
+ * `reactions` and `updated`, kept here so the projection is shown dropping them.
+ *
+ * Field names read out of go-vikunja v2.3.0 `pkg/models/task_comments.go` (`comment`, `author`,
+ * `created`) and `pkg/user/user.go` (`username`).
+ */
+const rawAuthor = {
+  id: 3,
+  name: "Evgenii Podivilov",
+  username: "evgenii",
+  email: "ev@example.com",
+  created: "2025-01-04T09:00:00Z",
+  updated: "2025-01-04T09:00:00Z",
+};
+
+const bareComment: RawComment & { updated: string; reactions: Record<string, unknown> } = {
+  id: 91,
+  comment: "<p>Ship it</p>",
+  author: rawAuthor,
+  created: "2026-07-24T18:21:09.315237Z",
+  updated: "2026-07-24T18:21:09.315237Z",
+  reactions: {},
 };
 
 /** TipTap wraps the checkbox in a `<label>`, so it is not the `<li>`'s first child. */
@@ -320,6 +347,63 @@ describe("toLeanUser", () => {
   it("R5: omits a blank name rather than sending the empty string back", () => {
     assert.equal("name" in toLeanUser({ id: 5, username: "bob", name: "" }), false);
     assert.equal("name" in toLeanUser({ id: 5, username: "bob", name: "  " }), false);
+  });
+});
+
+describe("toLeanComment", () => {
+  it("R5: converts the body to markdown and keeps only the author's username", () => {
+    const raw = { ...bareComment, comment: "<p>Ship <strong>today</strong></p>" };
+
+    // deepEqual on the whole DTO, not field by field: the point of the projection is what it
+    // does NOT carry — the user object, reactions and `updated` all have to be gone.
+    assert.deepEqual(toLeanComment(raw), {
+      id: 91,
+      comment: "Ship **today**",
+      author: "evgenii",
+      created: "2026-07-24T18:21:09.315237Z",
+    });
+  });
+
+  it("R5: never lets the raw user object cross the boundary", () => {
+    const lean = toLeanComment(bareComment);
+
+    assert.equal(typeof lean.author, "string");
+    assert.deepEqual(Object.keys(lean).sort(), ["author", "comment", "created", "id"]);
+    assert.equal(JSON.stringify(lean).includes("ev@example.com"), false, "no author email");
+  });
+
+  it("R5: converts a TipTap task list, checkbox state and all", () => {
+    const raw = { ...bareComment, comment: TIPTAP_TASK_LIST };
+
+    assert.equal(toLeanComment(raw).comment, "- [x] done thing\n- [ ] open thing");
+  });
+
+  it("R5: passes a legacy raw-markdown body through unescaped", () => {
+    const legacy = "Fix **bold** now\nnext line";
+    const raw = { ...bareComment, comment: legacy };
+
+    assert.equal(toLeanComment(raw).comment, legacy);
+  });
+
+  it("R5: omits the author when the server reports no user", () => {
+    const raw = { ...bareComment, author: null };
+    const lean = toLeanComment(raw);
+
+    assert.equal("author" in lean, false);
+    assert.deepEqual(lean, { id: 91, comment: "Ship it", created: "2026-07-24T18:21:09.315237Z" });
+  });
+
+  it("R5: omits the author when the user object carries no username", () => {
+    const raw = { ...bareComment, author: { ...rawAuthor, username: "" } };
+
+    assert.equal("author" in toLeanComment(raw), false);
+  });
+
+  it("R5: passes the created timestamp through verbatim", () => {
+    // A real timestamp, not a `due_date`-style zero date — nothing here may nullable it away.
+    const raw = { ...bareComment, created: "2020-02-29T23:59:59Z" };
+
+    assert.equal(toLeanComment(raw).created, "2020-02-29T23:59:59Z");
   });
 });
 

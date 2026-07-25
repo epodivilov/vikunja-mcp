@@ -58,10 +58,13 @@ primary reason this project exists.
 | `vikunja_list_labels` | read | for label mapping |
 | `vikunja_get_board` | read | project's kanban board as ordered columns of lean tasks + mode; reads the per-view kanban endpoint, both board modes |
 | `vikunja_list_members` | read | users a project can assign to, as `{ id, username, name? }`; never an email |
+| `vikunja_list_comments` | read | a task's comments as `LeanComment` rows, bodies as markdown |
+| `vikunja_get_comment` | read | one comment, by task + numeric `commentId` |
 | `vikunja_create_task` | write | markdown description accepted; `assignees` ride along in the create |
 | `vikunja_update_task` | write | partial fields incl. `done` |
 | `vikunja_complete_task` | write | convenience over update |
-| `vikunja_comment_task` | write | |
+| `vikunja_comment_task` | write | creates a comment; markdown body |
+| `vikunja_update_comment` | write | replaces a comment's body; markdown in, HTML stored; `destructiveHint` — no history to recover the old text from |
 | `vikunja_move_task` | write | move a task into a named column; manual-bucket boards only, refuses on filter boards |
 | `vikunja_label_task` | write | add and/or remove labels on a task; incremental, leaves unnamed labels alone |
 | `vikunja_set_task_labels` | write | replace a task's whole label set; `[]` clears it. Split from the above so the wholesale replace can be denied on its own |
@@ -70,6 +73,19 @@ primary reason this project exists.
 | `vikunja_relate_tasks` | write | relate two tasks by key under one of Vikunja's 11 kinds; the server writes the inverse |
 | `vikunja_unrelate_tasks` | write | remove one relation of a named kind; the server drops both directions |
 | `vikunja_delete_task` | write | isolated so it can be denied on its own |
+| `vikunja_delete_comment` | write | same isolation as `delete_task`, for one comment |
+
+Comments are the one thing here **not** addressed by key: they have no per-task sequence, so
+get/update/delete take the task (key or `{ id }`) plus the comment's global `commentId`. Both
+travel in the URL because the server matches them — a comment id belonging to another task is a
+404, not a silent read. Editing and deleting are **author-only** on the server (see the REST
+notes); both tools say so, because the 403 is otherwise unexplainable from the agent's side.
+
+The comment tools' shared body — `resolveCommentTarget` and `applyCommentUpdate` — lives in
+`tools/task-target.ts`, not in the four tool files, and that placement is deliberate: a module
+whose only runtime import is zod is one a `node --test` suite can load, and a tool file is not.
+Anything worth proving goes there; what stays in a tool file (the schema, the annotations, the
+one call) is unproved by construction.
 
 ## Invariants
 
@@ -289,6 +305,40 @@ collapse the whole key-resolution dance below into one request.)
   `xorm:"-"`, hence ignored on writes — which is why the read-modify-write in `client.updateTask`
   can spread it into the update body harmlessly. Relations must never be sent through a task
   write.
+- Comment update is the **opposite** of the task one, so do not generalize from it. `POST
+  /tasks/{task}/comments/{comment}` is Update in the same uniform CRUD handler, but its body is
+  `s.ID(...).Cols("comment").Update(tc)` (`pkg/models/task_comments.go` at v2.3.0): a single
+  column, no re-zeroing, so `{ comment }` alone is a correct partial write and needs no
+  read-modify-write. `author`, `created` and `updated` are server-managed and never sent.
+- A comment's address is `task + commentId`, and both halves are checked: `getTaskCommentSimple`
+  ANDs `task_id` into the lookup (an explicit IDOR guard), so a comment id belonging to another
+  task answers 404 with code **4015** (`ErrCodeTaskCommentDoesNotExist`, read out of
+  `pkg/models/error.go`) — the same answer an id that exists nowhere gets.
+- A comment's `author` is the **full user object** (`pkg/user/user.go`: `id`, `name`, `username`,
+  `email`, timestamps), and the listing also carries `reactions` and `updated`. `LeanComment`
+  keeps the username and nothing else. On the listing path the author is a map lookup by id, so
+  it can be `null` when the user is gone; the single-comment read always fills it in.
+- Comment bodies are stored exactly like descriptions: verbatim, unsanitized, and legacy ones may
+  be raw markdown. Same conversion on the way in, same allowlist sniff on the way out.
+- **Editing and deleting a comment are author-only, and project write access is not enough.**
+  `pkg/models/task_comment_permissions.go` at 2.3.0: `CanUpdate` and `CanDelete` both call
+  `canUserModifyTaskComment`, which checks `Task.CanWrite` *and then* ends in
+  `a.GetID() == savedComment.AuthorID` (a link share is compared against its own user id the same
+  way). A project admin editing someone else's comment gets `403 Forbidden` — from
+  `echo.NewHTTPError` in the web handler, so the body carries no Vikunja `code`, and
+  `VikunjaHttpError.code` is `undefined` rather than a number worth branching on. Creating and
+  reading are not restricted this way: `CanCreate` is plain task write access, `CanRead` plain
+  task read. Both write tools say so in their descriptions — an agent asked to fix a typo in
+  someone else's comment has to be able to anticipate that 403 rather than read it as a broken
+  server.
+- **Comments on an archived project need no special handling** — the rare case where this server
+  can just pass the server through. Writes are refused honestly: `canUserModifyTaskComment` ->
+  `Task.CanWrite` -> `canDoTask` -> `Project.CanWrite`, which returns `CheckIsArchived`'s
+  `ErrProjectIsArchived` (HTTP 412, code 3008). That is the opposite of the kanban bucket-move
+  endpoint, which sails straight through on an archived board. Reads work, and — the part that
+  matters — the comment endpoints address the task **by id in the URL**, so they never touch the
+  `GET /tasks` collection that answers `[]` for an archived project. The lie the resolver refuses
+  on the listing paths cannot occur here, so nothing here refuses anything.
 
 ## Releasing
 

@@ -8,10 +8,13 @@ import { registerAssignTaskTool } from "./tools/assign-task.js";
 import { registerCommentTaskTool } from "./tools/comment-task.js";
 import { registerCompleteTaskTool } from "./tools/complete-task.js";
 import { registerCreateTaskTool } from "./tools/create-task.js";
+import { registerDeleteCommentTool } from "./tools/delete-comment.js";
 import { registerDeleteTaskTool } from "./tools/delete-task.js";
 import { registerGetBoardTool } from "./tools/get-board.js";
+import { registerGetCommentTool } from "./tools/get-comment.js";
 import { registerGetTaskTool } from "./tools/get-task.js";
 import { registerLabelTaskTool } from "./tools/label-task.js";
+import { registerListCommentsTool } from "./tools/list-comments.js";
 import { registerListLabelsTool } from "./tools/list-labels.js";
 import { registerListMembersTool } from "./tools/list-members.js";
 import { registerListProjectsTool } from "./tools/list-projects.js";
@@ -21,6 +24,7 @@ import { registerRelateTasksTool } from "./tools/relate-tasks.js";
 import { registerSetTaskLabelsTool } from "./tools/set-task-labels.js";
 import { registerUnassignTaskTool } from "./tools/unassign-task.js";
 import { registerUnrelateTasksTool } from "./tools/unrelate-tasks.js";
+import { registerUpdateCommentTool } from "./tools/update-comment.js";
 import { registerUpdateTaskTool } from "./tools/update-task.js";
 
 async function main(): Promise<void> {
@@ -50,6 +54,8 @@ async function main(): Promise<void> {
   registerListLabelsTool(server, client);
   registerGetBoardTool(server, client, resolver);
   registerListMembersTool(server, client, resolver);
+  registerListCommentsTool(server, client, resolver);
+  registerGetCommentTool(server, client, resolver);
   //       See CLAUDE.md -> "Tool surface". Each tool lives in src/tools/*.
 
   // Write tools. One per operation, and never behind a shared `subcommand` argument: an MCP
@@ -58,6 +64,7 @@ async function main(): Promise<void> {
   registerUpdateTaskTool(server, client, resolver);
   registerCompleteTaskTool(server, client, resolver);
   registerCommentTaskTool(server, client, resolver);
+  registerUpdateCommentTool(server, client, resolver);
   registerMoveTaskTool(server, client, resolver);
   registerLabelTaskTool(server, client, resolver);
   registerSetTaskLabelsTool(server, client, resolver);
@@ -66,6 +73,7 @@ async function main(): Promise<void> {
   registerRelateTasksTool(server, client, resolver);
   registerUnrelateTasksTool(server, client, resolver);
   registerDeleteTaskTool(server, client, resolver);
+  registerDeleteCommentTool(server, client, resolver);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -10,6 +10,7 @@ import type {
   BoardMode,
   LeanBoard,
   LeanColumn,
+  LeanComment,
   LeanLabel,
   LeanProject,
   LeanRelation,
@@ -17,6 +18,7 @@ import type {
   LeanTaskDetail,
   LeanUser,
   RawBucket,
+  RawComment,
   RawLabel,
   RawProject,
   RawTask,
@@ -155,6 +157,32 @@ export function toLeanUser(raw: RawUser): LeanUser {
   }
 
   return user;
+}
+
+/**
+ * One comment -> the four fields an agent can use. The body goes through the same
+ * `htmlToMarkdown` a description does, since comments are stored the same way: verbatim HTML
+ * from the editor, or raw markdown when an older client wrote them.
+ *
+ * The author collapses to a username. Vikunja expands it to the whole user record — name, email,
+ * avatar provider, its own timestamps — and none of that is anyone's business here; a comment
+ * with no resolvable author (deleted user, link share) simply has no `author` field rather than
+ * an empty string. `created` is passed through untouched: unlike a due date it is always a real
+ * timestamp, so `nullableDate` has nothing to do to it.
+ */
+export function toLeanComment(raw: RawComment): LeanComment {
+  const comment: LeanComment = {
+    id: raw.id,
+    comment: htmlToMarkdown(raw.comment),
+    created: raw.created,
+  };
+
+  const username = raw.author?.username;
+  if (username) {
+    comment.author = username;
+  }
+
+  return comment;
 }
 
 export function toLeanProject(raw: RawProject): LeanProject {
