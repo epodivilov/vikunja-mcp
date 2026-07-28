@@ -15,8 +15,11 @@ export function registerListLabelsTool(server: McpServer, client: VikunjaClient)
     {
       title: "List labels",
       description:
-        "Lists every label available to you as { id, title }. Task listings show label " +
-        "titles; this is how a title maps to the id Vikunja addresses it by.",
+        "Lists every label available to you as { id, title, color? }, the colour lower-cased " +
+        "without a leading # and absent when the label has none. Task listings show label " +
+        "titles; this is " +
+        "how a title maps to the id Vikunja addresses it by, which is also what disambiguates a " +
+        "title two labels share.",
       annotations: { readOnlyHint: true },
     },
     async () => jsonResult((await client.listLabels()).map(toLeanLabel)),

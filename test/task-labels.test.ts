@@ -28,13 +28,23 @@ interface RecordedCall {
   body: unknown;
 }
 
-/** The instance's labels. "bug" is deliberately duplicated, as it is on the real instance. */
+/** A label as the API returns one. Colour and description play no part in these paths. */
+function label(id: number, title: string): RawLabel {
+  return { id, title, description: "", hex_color: "" };
+}
+
+/**
+ * The instance's labels. "bug" is deliberately duplicated: nothing in Vikunja enforces label-title
+ * uniqueness, so a shared title is a shape the server will produce whatever this project does
+ * about it — `vikunja_create_label` refuses to add one, but it is not the only writer an instance
+ * has. (The instance this was built against has 39 labels and no duplicate titles today.)
+ */
 const LABELS: RawLabel[] = [
-  { id: 5, title: "feature" },
-  { id: 45, title: "specified" },
-  { id: 46, title: "in-progress" },
-  { id: 2, title: "bug" },
-  { id: 3, title: "bug" },
+  label(5, "feature"),
+  label(45, "specified"),
+  label(46, "in-progress"),
+  label(2, "bug"),
+  label(3, "bug"),
 ];
 
 const PROJECTS: RawProject[] = [

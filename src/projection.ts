@@ -8,6 +8,8 @@ import TurndownService from "turndown";
 import { tables } from "turndown-plugin-gfm";
 import type {
   BoardMode,
+  LabelFields,
+  LabelWrite,
   LeanBoard,
   LeanColumn,
   LeanComment,
@@ -136,8 +138,79 @@ export function nullableDate(raw: string): string | undefined {
   return !raw || raw === ZERO_DATE ? undefined : raw;
 }
 
+/** Six hex digits, with an optional leading `#` — the only colour Vikunja can actually render. */
+const HEX_COLOR = /^#?[0-9a-f]{6}$/i;
+
+/**
+ * A stored colour in the one form this server reports: no `#`, lower-case, trimmed. Applied on
+ * the way out as well as on the way in, because the server stores whatever case it was handed
+ * and most of a real instance's labels are upper-case.
+ *
+ * Deliberately does not validate: a colour already stored is reported as it is, not refused. The
+ * validation belongs on the write, where refusing still changes the outcome.
+ */
+function normaliseHex(raw: string): string {
+  return raw.trim().replace(/^#/, "").toLowerCase();
+}
+
+/**
+ * A colour as the tools accept one -> the value Vikunja stores, or an error naming the form.
+ *
+ * Six hex digits is stricter than the server, on purpose, and the two gaps it closes both lose
+ * data silently. `hex_color` is validated as `runelength(0|7)` and then run through `NormalizeHex`
+ * (v2.3.0 `pkg/utils`), which strips a leading `#` **and truncates to six characters**: `ff00001`
+ * passes the length check and is stored as `ff0000`, a colour the caller never asked for. And
+ * `red` passes it too, storing a value nothing can render. Neither is reported as an error, so
+ * neither can be noticed from the outside.
+ */
+export function parseHexColor(input: string): string {
+  const color = input.trim();
+
+  if (!HEX_COLOR.test(color)) {
+    throw new Error(
+      `"${input}" is not a colour Vikunja can store. Use six hex digits, with or without a leading "#" — "#0ea5e9" or "0ea5e9". Pass "" to leave a label with no colour.`,
+    );
+  }
+
+  return normaliseHex(color);
+}
+
+/**
+ * Label fields -> the columns the API writes, the mirror of `toLeanLabel`. Only the fields present
+ * are mapped: an omitted one means "leave it alone", and `client.updateLabel` is what supplies the
+ * stored value in its place — `POST /labels/{id}` zeroes every column its payload omits.
+ *
+ * Clearing therefore has to be spelled, as it does for a task's description: `color: ""` becomes
+ * an explicit empty `hex_color` rather than an absent key.
+ */
+export function toLabelWrite(fields: LabelFields): LabelWrite {
+  const write: LabelWrite = {};
+
+  if (fields.title !== undefined) {
+    write.title = fields.title;
+  }
+  if (fields.color !== undefined) {
+    write.hex_color = fields.color.trim() === "" ? "" : parseHexColor(fields.color);
+  }
+
+  return write;
+}
+
+/**
+ * A label, stripped to what an agent can act on. Field by field rather than by spread, like
+ * `toLeanUser`: the raw label carries a `created_by` user object and a description, and a spread
+ * would hand both to the model.
+ */
 export function toLeanLabel(raw: RawLabel): LeanLabel {
-  return { id: raw.id, title: raw.title };
+  const label: LeanLabel = { id: raw.id, title: raw.title };
+  const color = normaliseHex(raw.hex_color);
+
+  // `""` is how Vikunja stores "no colour"; absent says the same thing for free.
+  if (color !== "") {
+    label.color = color;
+  }
+
+  return label;
 }
 
 /**

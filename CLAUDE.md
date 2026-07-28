@@ -55,7 +55,7 @@ primary reason this project exists.
 | `vikunja_list_projects` | read | keys + titles only |
 | `vikunja_list_tasks` | read | filters: project, done, search; lean rows |
 | `vikunja_get_task` | read | input: key (`INFRA-41`) or `{ id }`; carries the task's relations as lean refs |
-| `vikunja_list_labels` | read | for label mapping |
+| `vikunja_list_labels` | read | for label mapping; `{ id, title, color? }` |
 | `vikunja_get_board` | read | project's kanban board as ordered columns of lean tasks + mode; reads the per-view kanban endpoint, both board modes |
 | `vikunja_list_members` | read | users a project can assign to, as `{ id, username, name? }`; never an email |
 | `vikunja_list_comments` | read | a task's comments as `LeanComment` rows, bodies as markdown |
@@ -69,12 +69,15 @@ primary reason this project exists.
 | `vikunja_move_task` | write | move a task into a named column; manual-bucket boards only, refuses on filter boards |
 | `vikunja_label_task` | write | add and/or remove labels on a task; incremental, leaves unnamed labels alone |
 | `vikunja_set_task_labels` | write | replace a task's whole label set; `[]` clears it. Split from the above so the wholesale replace can be denied on its own |
+| `vikunja_create_label` | write | creates a label; refuses an empty title and one another label already holds — the server accepts both |
+| `vikunja_update_label` | write | rename and/or recolour a label; merges onto the whole stored record, since `POST /labels/{id}` zeroes what it omits |
 | `vikunja_assign_task` | write | additive; already-assigned users produce no write |
 | `vikunja_unassign_task` | write | refuses a user who is not assigned — the server would not |
 | `vikunja_relate_tasks` | write | relate two tasks by key under one of Vikunja's 11 kinds; the server writes the inverse |
 | `vikunja_unrelate_tasks` | write | remove one relation of a named kind; the server drops both directions |
 | `vikunja_delete_task` | write | isolated so it can be denied on its own |
 | `vikunja_delete_comment` | write | same isolation as `delete_task`, for one comment |
+| `vikunja_delete_label` | write | deletes the label itself; refuses while tasks carry it unless `force`, and reports how many lost it |
 
 Comments are the one thing here **not** addressed by key: they have no per-task sequence, so
 get/update/delete take the task (key or `{ id }`) plus the comment's global `commentId`. Both
@@ -90,6 +93,19 @@ one call) is unproved by construction. `vikunja_bulk_update_tasks` follows the s
 same reason — `resolveBulkTargets`, `findBulkBlockers` and `applyBulkUpdate` are all in that
 module, because the ordering the tool depends on (resolve, vet, *then* write) is exactly what a
 restated test body would leave unproved.
+
+The three label tools follow the same rule through `tools/label-fields.ts`: the shared `label`
+and colour argument shapes, the two refusals that need no server at all — an update naming no
+field, and the delete guard's decision given a task count and `force` — **and the three tool
+bodies themselves**, `applyLabelCreate` / `applyLabelUpdate` / `applyLabelDelete`. Same
+constraint, same shape: zod plus type-only imports, with the projection handed in as a parameter
+rather than imported, and a test that calls the shipped functions rather than a copy of them.
+
+The bodies belong there for a reason worth stating plainly, because the first cut of this work
+put them in the registration files and a green suite said nothing: the duplicate-title check, the
+delete guard and the rename-side title check could each be deleted with all 337 tests still
+passing. A tool file is unproved by construction, so what it holds must be a schema, its
+annotations and one call — nothing that can be wrong.
 
 ## Invariants
 
@@ -308,6 +324,59 @@ collapse the whole key-resolution dance below into one request.)
   indistinguishable from a real permission failure. A per-label add is refused with code 8001 when
   it is already there. Both are reasons the label tools diff to a set and use the bulk endpoint
   instead of firing per-label writes; `client.addTaskLabel` remains only for `create_task`.
+- **The label entity itself takes anything.** `PUT /labels` answers 201 for `title: ""` — the
+  `runelength(1|250)` tag skips an empty string, and a whitespace-only title is stored verbatim —
+  and 201 again for a title another label already holds (two `vmcp23-probe-a` labels created back
+  to back, both accepted). The case-sensitive uniqueness check in these notes is about *project
+  identifiers*; nothing enforces label-title uniqueness at all. Both refusals are therefore ours,
+  and the duplicate one is not cosmetic: `resolveLabelIds` refuses an ambiguous title, so a second
+  `bug` makes **both** unaddressable by title in `create_task`, `label_task` and
+  `set_task_labels` at once. The empty-title refusal belongs on the update path as well as the
+  create one — `POST /labels/{id}` accepts `""` just as happily.
+- **`POST /labels/{id}` is a fixed-column write, exactly like the task update.** `Label.Update`
+  writes `Cols("title", "description", "hex_color")`, so an omitted field is zeroed rather than
+  kept. Probed on 2.3.0: a label with a description and `hex_color: e8e8e8`, updated with
+  `{ title }` alone, came back with both blanked; updated with `{ hex_color }` alone, its title
+  became `""`. `client.updateLabel` therefore merges the patch onto the whole stored record — but,
+  unlike `client.updateTask`, it does **not** read that record itself: the resolver already
+  listed every label to find this one, so the record arrives from the caller and the merge is
+  complete by type rather than by a second request.
+- **`hex_color` is validated as `runelength(0|7)` and then normalized, and the normalization is
+  where data is lost.** `NormalizeHex` (v2.3.0 `pkg/utils`) strips a leading `#` *and truncates to
+  six characters*: `#ff0000` stores `ff0000` (fine) and `ff00001` — 7 runes, so it passes the
+  length check — stores `ff0000` too, silently. `not-a-color` is refused with 412 code 2002, but
+  `red` passes the length check and is stored as a colour nothing can render. Both gaps are why
+  `projection.parseHexColor` demands six hex digits here rather than leaning on the server. Stored
+  values are mostly upper-case in practice (34 of one instance's 39 labels), so `toLeanLabel`
+  reports a canonical lower-case form without the `#`.
+- **Deleting a label detaches it from every task, with no warning and no undo.** Verified live: a
+  task carrying the label reported `labels: null` immediately after `DELETE /labels/{id}`, and the
+  delete itself answered a plain 200. Mechanically the `label_tasks` rows are *not* removed —
+  `Label.Delete` is a single `s.ID(l.ID).Delete(&Label{})` — the task simply stops reporting a
+  label the read can no longer join. So word it `detachedFrom` for the caller and do not promise
+  cleanup. This is the whole reason `vikunja_delete_label` counts first and refuses without
+  `force`; renaming needs no such guard, since a board's filter buckets key on label *ids*
+  (`labels in 45`) and survive a rename.
+- **That count is a floor, and the cheap-looking shortcut is a trap.** It goes through
+  `listTasks({ labelId })` (`labels in <id>`), which exhausts pagination and parses every matching
+  row — 142 for `feature` on this instance — and it misses tasks in archived projects, since
+  `GET /tasks` builds its collection from non-archived ones and takes no parameter to widen that.
+  The refusal says so rather than claiming a total. `x-pagination-result-count` is **not** the
+  count: it reports the rows in the page just returned. Probed on `labels in 5`: `per_page=1`
+  answers `result-count: 1` and `total-pages: 142`, `per_page=1000` answers `result-count: 142`
+  and `total-pages: 1` — so a guard built on the result count would refuse "1 task" for a label on
+  142.
+- **Updating and deleting a label are owner-only, and that is the server's call to make.**
+  `Label.CanUpdate` and `CanDelete` (v2.3.0 `label_permissions.go`) both go through `isLabelOwner`
+  (`CreatedByID == a.GetID()`), while `CanRead` also passes anyone who can see a task the label is
+  on — so the listing can show a label these tools cannot change, and the server answers 403. Do
+  not pre-check ownership: `created_by` would have to cross into a layer that has no business with
+  it, and the check would be a second source of truth for a rule the server already enforces. Both
+  write tools say so in their descriptions instead.
+- A label id that no longer exists reads as **403**, not 404: `GET /labels/{id}` on a deleted
+  label answered "You don't have the permission to see this" with no Vikunja code, while
+  `POST`/`DELETE` on an id that never existed answered 404 code 8002. Neither is worth branching
+  on — but no error message here may promise a 404 for a missing label.
 - **Assignees stick on create, unlike labels.** `PUT /projects/{id}/tasks` runs
   `createTask(..., updateAssignees: true)`, writing them in the task's own transaction, which the
   web handler rolls back on error — so a rejected assignee leaves no task behind and a valid one
@@ -458,8 +527,11 @@ npm run build
 
 Tests live in `test/`, not `src/` — `src` is the build root and `files: ["dist"]` would publish
 them. They run through `node --test` on the TypeScript directly, so **development needs Node
-22.6+** even though the shipped code still supports the `engines` floor of 20. `tsc` does not
-typecheck `test/` (`include: ["src"]`); Biome still lints it.
+22.6+** even though the shipped code still supports the `engines` floor of 20. `tsc` **does**
+typecheck `test/`: `npm run typecheck` runs `tsconfig.check.json`, whose `include` is
+`["src", "test"]` — only the emitting `tsconfig.json` is scoped to `src`. Biome lints it too. So
+widening a `Raw*` type breaks every fixture that builds one, and that is a red build to fix with
+the change, not a nit to leave behind.
 
 Running the TypeScript directly, **combined with this repo's `.js`-specifier import convention**,
 has one consequence worth knowing before moving code: the type-stripping loader does not resolve

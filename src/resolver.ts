@@ -446,13 +446,13 @@ export class Resolver {
   /**
    * Label titles -> the ids the task/label endpoint takes.
    *
-   * Titles are not unique: Vikunja enforces nothing there, and the instance this was built
-   * against carries three labels called "feature" and three called "bug", so the collision is
-   * the normal case rather than a corner one. An ambiguous title is therefore reported
-   * instead of resolved to the lower id — picking one silently is the class of bug this module
-   * exists to prevent — and the error names the ids to choose between. A number is taken as a
-   * label id and still checked against the listing, so every label in a call is validated
-   * before the caller writes anything and a typo cannot leave a half-labelled task behind.
+   * Titles are not unique: Vikunja enforces nothing there, so two labels called "bug" are a
+   * shape the server will happily produce — `vikunja_create_label` refuses to add one, but
+   * anything else writing to the instance can. An ambiguous title is therefore reported instead
+   * of resolved to the lower id — picking one silently is the class of bug this module exists to
+   * prevent — and the error names the ids to choose between. A number is taken as a label id and
+   * still checked against the listing, so every label in a call is validated before the caller
+   * writes anything and a typo cannot leave a half-labelled task behind.
    *
    * Deliberately uncached: labels are read once per write that carries them, which is rare, and
    * a cache would answer "no such label" for one created a moment ago in the UI.
@@ -468,10 +468,58 @@ export class Resolver {
     const ids = new Set<number>();
 
     for (const label of labels) {
-      ids.add(typeof label === "number" ? labelById(known, label) : labelByTitle(known, label));
+      ids.add(labelByRef(known, label).id);
     }
 
     return [...ids];
+  }
+
+  /**
+   * The label a write names — the whole record, not just its id, because `client.updateLabel`
+   * needs every stored column to merge its patch onto and `vikunja_delete_label` has to name what
+   * it destroyed.
+   *
+   * `newTitle`, when the write is a rename, is checked against the same listing rather than a
+   * second one: resolving the target and asking whether the new title is free are two questions
+   * about one collection, and `resolveLabelIds` is deliberately uncached. The label being renamed
+   * is excluded from that check, so renaming a label to the title it already holds is not a
+   * collision with itself.
+   */
+  async resolveLabel(ref: LabelRef, newTitle?: string): Promise<RawLabel> {
+    // Before the listing, so an unusable title costs no request — and, on the rename path, so the
+    // caller hears about its own argument rather than about the label it named.
+    const wanted = newTitle === undefined ? undefined : parseLabelTitle(newTitle);
+    const known = await this.#client.listLabels();
+    const label = labelByRef(known, ref);
+
+    if (wanted !== undefined) {
+      checkTitleAvailable(known, wanted, label.id);
+    }
+
+    return label;
+  }
+
+  /**
+   * Refuses a title that would make a label unnameable, before a create writes anything.
+   *
+   * Both refusals are ours, because the server makes neither. `PUT /labels` answers 201 for
+   * `title: ""` — the `runelength(1|250)` tag skips an empty string — leaving a label nothing
+   * here can address. And it answers 201 for a title another label already holds, which is worse
+   * than local damage: `resolveLabelIds` refuses an ambiguous title, so a second "bug" makes
+   * *both* labels unaddressable by title in `create_task`, `label_task` and `set_task_labels` at
+   * once.
+   *
+   * Answers with the title it actually checked — trimmed — so the caller writes the same string
+   * this vetted rather than the raw one. The tool schema trims too, but that is a guarantee
+   * living in a file no test can load; taking it from here keeps the check and the write on one
+   * source of truth.
+   */
+  async checkLabelTitleAvailable(title: string): Promise<string> {
+    const wanted = parseLabelTitle(title);
+
+    checkTitleAvailable(await this.#client.listLabels(), wanted);
+
+    return wanted;
   }
 
   /**
@@ -1006,24 +1054,24 @@ function assignedById(assigned: readonly RawUser[], id: number): number {
   return user.id;
 }
 
-function labelById(known: readonly RawLabel[], id: number): number {
+function labelById(known: readonly RawLabel[], id: number): RawLabel {
   const label = known.find((candidate) => candidate.id === id);
 
   if (label === undefined) {
     throw new Error(`No label has id ${id}. List labels to see which ids exist.`);
   }
 
-  return label.id;
+  return label;
 }
 
-function labelByTitle(known: readonly RawLabel[], title: string): number {
-  const wanted = title.trim().toLowerCase();
+function labelByTitle(known: readonly RawLabel[], title: string): RawLabel {
+  const wanted = normaliseTitle(title);
 
   if (wanted === "") {
     throw new Error('A label is named by its title, e.g. "bug", or by its id.');
   }
 
-  const [match, ...rest] = known.filter((label) => label.title.trim().toLowerCase() === wanted);
+  const [match, ...rest] = known.filter((label) => normaliseTitle(label.title) === wanted);
 
   if (match === undefined) {
     throw new Error(`No label is titled "${title}". List labels to see the titles in use.`);
@@ -1036,5 +1084,53 @@ function labelByTitle(known: readonly RawLabel[], title: string): number {
     );
   }
 
-  return match.id;
+  return match;
+}
+
+/** The one label a reference names, whichever way it was written. */
+function labelByRef(known: readonly RawLabel[], ref: LabelRef): RawLabel {
+  return typeof ref === "number" ? labelById(known, ref) : labelByTitle(known, ref);
+}
+
+/** A title as titles are compared here: trimmed and case-folded, the way a caller types one. */
+function normaliseTitle(title: string): string {
+  return title.trim().toLowerCase();
+}
+
+/**
+ * A title a label can actually be named by, or an error. Whitespace is not a name: the server
+ * stores `" "` verbatim and then no tool here can address the label, since every title match
+ * trims first.
+ */
+function parseLabelTitle(input: string): string {
+  const title = input.trim();
+
+  if (title === "") {
+    throw new Error(
+      'A label title is required, e.g. "bug". Vikunja would store an empty one, and nothing could name it afterwards.',
+    );
+  }
+
+  return title;
+}
+
+/**
+ * Refuses a title another label already holds, compared the way label titles are addressed:
+ * trimmed and case-insensitively. `exceptId` is the label being renamed, which cannot collide
+ * with itself — renaming a label to the title it already has has to stay a no-op, not an error.
+ *
+ * The refusal names the id of the label in the way, because that is the one thing the caller can
+ * act on: use that label, or pick another title.
+ */
+function checkTitleAvailable(known: readonly RawLabel[], title: string, exceptId?: number): void {
+  const wanted = normaliseTitle(title);
+  const clash = known.find(
+    (label) => label.id !== exceptId && normaliseTitle(label.title) === wanted,
+  );
+
+  if (clash !== undefined) {
+    throw new Error(
+      `A label titled "${clash.title}" already exists (id ${clash.id}). Vikunja would allow a second one, but then neither could be named by its title — every label tool here refuses an ambiguous one. Use that label, or choose another title.`,
+    );
+  }
 }
