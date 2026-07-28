@@ -8,6 +8,7 @@
  */
 import type { Config } from "./config.js";
 import type {
+  LabelWrite,
   RawBucket,
   RawComment,
   RawLabel,
@@ -59,6 +60,16 @@ export interface TaskQuery {
   projectId?: number;
   /** Restrict by completion state. Omitted means both, which is what `GET /tasks` returns. */
   done?: boolean;
+  /**
+   * Restrict to the tasks carrying one label, by global id — `labels in <id>` in Vikunja's own
+   * dialect. Structured rather than left to the escape hatch below, so the one caller that needs
+   * it (the count behind the delete guard) does not hand-write a filter string.
+   *
+   * The count it yields is a floor, not a total: `GET /tasks` builds its collection from
+   * non-archived projects and takes no parameter to widen that, so a label used only inside an
+   * archived project is invisible here.
+   */
+  labelId?: number;
   /**
    * Escape hatch for expressions the fields above do not cover, e.g. `priority >= 4`. Written
    * in Vikunja's own filter syntax and therefore the one place a caller has to know it.
@@ -273,6 +284,44 @@ export class VikunjaClient {
 
   listLabels(): Promise<RawLabel[]> {
     return this.#requestAll<RawLabel>("/labels");
+  }
+
+  /**
+   * Creates a label. The response is the label as stored, `hex_color` normalized by the server —
+   * so unlike a task create, it is worth projecting rather than reading back.
+   *
+   * Nothing is validated here, and nothing is validated there either: `PUT /labels` accepts an
+   * empty title and a title another label already holds, both with a 201. Those refusals live
+   * above this layer, which only speaks HTTP.
+   */
+  createLabel(label: LabelWrite): Promise<RawLabel> {
+    return this.#requestObject<RawLabel>("PUT", "/labels", { body: label });
+  }
+
+  /**
+   * Read-modify-write, like `updateTask` — and for the same reason. `Label.Update` writes
+   * `Cols("title", "description", "hex_color")` and zeroes whatever the payload omits: probed on
+   * 2.3.0, a label updated with `{ title }` alone came back with its description and colour
+   * blanked, and one updated with `{ hex_color }` alone lost its title.
+   *
+   * The one departure from `updateTask` is where the record comes from: the caller passes it,
+   * because the resolver already listed every label to find this one. Reading it again would be a
+   * second request for a value in hand — and `GET /labels/{id}` is not even a reliable read, since
+   * a label the caller does not own answers 403 there while remaining perfectly updatable.
+   */
+  updateLabel(label: RawLabel, patch: LabelWrite): Promise<RawLabel> {
+    return this.#requestObject<RawLabel>("POST", `/labels/${label.id}`, {
+      body: { ...label, ...patch },
+    });
+  }
+
+  /**
+   * Deletes the label itself — not an association. Every task carrying it stops reporting it
+   * immediately, with no warning from the server and no undo; guarding that is the caller's job.
+   * Answers an empty body on success.
+   */
+  async deleteLabel(id: number): Promise<void> {
+    await this.#request<unknown>("DELETE", `/labels/${id}`);
   }
 
   /**
@@ -728,6 +777,13 @@ function buildTaskFilter(query: TaskQuery): string | undefined {
       throw new Error(`The done filter must be true or false, got ${JSON.stringify(query.done)}.`);
     }
     terms.push(`done = ${query.done}`);
+  }
+
+  if (query.labelId !== undefined) {
+    if (!Number.isSafeInteger(query.labelId) || query.labelId <= 0) {
+      throw new Error(`Label id must be a positive integer, got ${query.labelId}.`);
+    }
+    terms.push(`labels in ${query.labelId}`);
   }
 
   const filter = query.filter?.trim();

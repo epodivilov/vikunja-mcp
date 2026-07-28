@@ -68,12 +68,16 @@ Write (keep gated):
 - `vikunja_move_task` — move a task into a named column on a manual-bucket board
 - `vikunja_label_task` — add and/or remove labels on a task, leaving the rest alone
 - `vikunja_set_task_labels` — replace a task's whole label set; an empty list clears it
+- `vikunja_create_label` — create a label; a title another label already holds is refused
+- `vikunja_update_label` — rename a label and/or change its colour, instance-wide
 - `vikunja_assign_task` — assign users by username, keeping whoever is already assigned
 - `vikunja_unassign_task` — remove users from a task
 - `vikunja_relate_tasks` — record that one task blocks, precedes, duplicates or parents another
 - `vikunja_unrelate_tasks` — remove one such relation
 - `vikunja_delete_task`
 - `vikunja_delete_comment` — author-only as well
+- `vikunja_delete_label` — deletes the label itself, taking it off every task that carries it;
+  refused while any task does unless `force` is passed
 
 Because each operation is its own tool, you can grant read access permanently while still
 reviewing every write:

@@ -39,6 +39,11 @@ function user(id: number, username: string, name = ""): RawUser {
   return { id, username, name };
 }
 
+/** A label as the API returns one. Colour and description are noise for every case here. */
+function label(id: number, title: string): RawLabel {
+  return { id, title, description: "", hex_color: "" };
+}
+
 interface StubOptions {
   /** False emulates a server that drops the `index` term and answers with the whole project. */
   honoursIndex?: boolean;
@@ -493,11 +498,7 @@ describe("Resolver.taskRefLookup", () => {
 });
 
 describe("Resolver.resolveLabelIds", () => {
-  const LABELS: RawLabel[] = [
-    { id: 1, title: "feature" },
-    { id: 2, title: "bug" },
-    { id: 5, title: "feature" },
-  ];
+  const LABELS: RawLabel[] = [label(1, "feature"), label(2, "bug"), label(5, "feature")];
 
   function labelResolver(labels = LABELS): Resolver {
     return new Resolver(stubClient(PROJECTS, TASKS, { labels }));
@@ -538,10 +539,7 @@ describe("Resolver.resolveLabelIds", () => {
   });
 
   it("resolves titles and ids in one call, keeping the order they were named in", async () => {
-    const pipeline: RawLabel[] = [
-      { id: 5, title: "feature" },
-      { id: 45, title: "specified" },
-    ];
+    const pipeline: RawLabel[] = [label(5, "feature"), label(45, "specified")];
 
     assert.deepEqual(
       await labelResolver(pipeline).resolveLabelIds(["specified", 5, "SPECIFIED"]),
@@ -562,18 +560,15 @@ describe("Resolver.resolveLabelIds", () => {
  */
 describe("Resolver.resolveLabelChange", () => {
   const LABELS: RawLabel[] = [
-    { id: 2, title: "bug" },
-    { id: 3, title: "bug" },
-    { id: 5, title: "feature" },
-    { id: 45, title: "specified" },
-    { id: 46, title: "in-progress" },
+    label(2, "bug"),
+    label(3, "bug"),
+    label(5, "feature"),
+    label(45, "specified"),
+    label(46, "in-progress"),
   ];
 
   /** A task in the middle of the pipeline: one workflow label, one kind label. */
-  const CURRENT: RawLabel[] = [
-    { id: 5, title: "feature" },
-    { id: 45, title: "specified" },
-  ];
+  const CURRENT: RawLabel[] = [label(5, "feature"), label(45, "specified")];
 
   function changeResolver(labels = LABELS): Resolver {
     return new Resolver(stubClient(PROJECTS, TASKS, { labels }));
@@ -605,10 +600,7 @@ describe("Resolver.resolveLabelChange", () => {
   it("matches a removal against the task's own labels, so a shared title still names one", async () => {
     // "bug" is two labels instance-wide, which would be ambiguous on an add. On a remove it is
     // not: only one of them is on the task, and that is the one meant.
-    const current: RawLabel[] = [
-      { id: 2, title: "bug" },
-      { id: 5, title: "feature" },
-    ];
+    const current: RawLabel[] = [label(2, "bug"), label(5, "feature")];
 
     const next = await changeResolver().resolveLabelChange(current, { remove: ["BUG"] });
 
@@ -681,7 +673,7 @@ describe("Resolver.resolveLabelChange", () => {
 
     await assert.rejects(() => resolver.resolveLabelChange(CURRENT, change), /both add and remove/);
     await assert.rejects(
-      () => resolver.resolveLabelChange([{ id: 5, title: "feature" }], change),
+      () => resolver.resolveLabelChange([label(5, "feature")], change),
       /both add and remove/,
     );
   });

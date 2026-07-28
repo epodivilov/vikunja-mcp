@@ -10,7 +10,9 @@ import {
   htmlToMarkdown,
   markdownToHtml,
   nullableDate,
+  parseHexColor,
   relatedProjectIds,
+  toLabelWrite,
   toLeanBoard,
   toLeanColumn,
   toLeanComment,
@@ -21,7 +23,14 @@ import {
   toLeanUser,
   toTaskWrite,
 } from "../src/projection.ts";
-import type { RawComment, RawProject, RawTask, RawUser, TaskRefLookup } from "../src/types.ts";
+import type {
+  RawComment,
+  RawLabel,
+  RawProject,
+  RawTask,
+  RawUser,
+  TaskRefLookup,
+} from "../src/types.ts";
 
 /** A task as the API returns it with every optional value unset. */
 const bareTask: RawTask = {
@@ -117,9 +126,9 @@ describe("toLeanTask", () => {
   });
 
   it("flattens labels to titles", () => {
-    const labels = [
-      { id: 5, title: "feature" },
-      { id: 6, title: "urgent" },
+    const labels: RawLabel[] = [
+      { id: 5, title: "feature", description: "", hex_color: "" },
+      { id: 6, title: "urgent", description: "", hex_color: "ff0000" },
     ];
     assert.deepEqual(toLeanTask({ ...bareTask, labels }).labels, ["feature", "urgent"]);
   });
@@ -324,8 +333,84 @@ describe("toLeanProject / toLeanLabel", () => {
     assert.equal("archived" in toLeanProject(bareProject), false);
   });
 
-  it("maps a label", () => {
-    assert.deepEqual(toLeanLabel({ id: 5, title: "feature" }), { id: 5, title: "feature" });
+  it("R7: maps a label to id, title and colour, dropping the raw fields around them", () => {
+    // The server sends `created_by` (a whole user object) and a description alongside these
+    // three; a projection that spread the raw label would hand both to the model.
+    const raw = {
+      id: 5,
+      title: "feature",
+      description: "kind marker",
+      hex_color: "ff0000",
+      created_by: { id: 3, username: "evgenii", name: "", email: "ev@example.com" },
+    } as RawLabel;
+
+    assert.deepEqual(toLeanLabel(raw), { id: 5, title: "feature", color: "ff0000" });
+  });
+
+  it("R7: reports a stored colour in one canonical form, whatever case it was stored in", () => {
+    // 34 of the instance's 39 labels store upper-case hex ("0EA5E9"), so this is the normal
+    // shape rather than an edge case — and an agent comparing two colours must not have to
+    // fold case itself.
+    const raw: RawLabel = { id: 45, title: "specified", description: "", hex_color: "0EA5E9" };
+
+    assert.equal(toLeanLabel(raw).color, "0ea5e9");
+  });
+
+  it("R7: omits the colour key entirely for a label that has none", () => {
+    const raw: RawLabel = { id: 46, title: "in-progress", description: "", hex_color: "" };
+
+    assert.deepEqual(toLeanLabel(raw), { id: 46, title: "in-progress" });
+    assert.equal("color" in toLeanLabel(raw), false);
+  });
+});
+
+describe("parseHexColor", () => {
+  it("R2: accepts six hex digits with or without the leading #, normalising both alike", () => {
+    assert.equal(parseHexColor("#FF0000"), "ff0000");
+    assert.equal(parseHexColor("ff0000"), "ff0000");
+    assert.equal(parseHexColor(" #0EA5E9 "), "0ea5e9");
+  });
+
+  it("R2: refuses anything that is not six hex digits, naming the accepted form", () => {
+    // Each of these is a shape the server would take and store as something else:
+    // `red` passes its runelength(0|7) check and is stored as a colour nothing renders, and
+    // `ff00001` is 7 runes — also accepted — which NormalizeHex silently truncates to `ff0000`.
+    for (const bad of ["red", "#gggggg", "#ff00001", "ff00001", "fff", ""]) {
+      assert.throws(
+        () => parseHexColor(bad),
+        /six hex digits/,
+        `"${bad}" must be refused before it reaches the server`,
+      );
+    }
+  });
+});
+
+describe("toLabelWrite", () => {
+  it('R2: an empty colour is the clear — sent as "" rather than left out', () => {
+    // Omission means "leave it alone" on the merge the client does, so clearing has to be
+    // spelled: the key must be present and empty.
+    const write = toLabelWrite({ color: "" });
+
+    assert.deepEqual(write, { hex_color: "" });
+    assert.equal("hex_color" in write, true);
+  });
+
+  it("R2/R3: a patch naming only a title carries no colour key at all", () => {
+    const write = toLabelWrite({ title: "renamed" });
+
+    assert.deepEqual(write, { title: "renamed" });
+    assert.equal("hex_color" in write, false, "the stored colour is the client merge's to supply");
+  });
+
+  it("R2: a colour is normalised on the way to the API's own field name", () => {
+    assert.deepEqual(toLabelWrite({ title: "bug", color: "#00FF00" }), {
+      title: "bug",
+      hex_color: "00ff00",
+    });
+  });
+
+  it("R2: an unparseable colour is refused here, before any write", () => {
+    assert.throws(() => toLabelWrite({ title: "bug", color: "red" }), /six hex digits/);
   });
 });
 

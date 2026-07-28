@@ -141,6 +141,15 @@ export type TaskRefLookup = (projectId: number, index: number) => string;
 export interface LeanLabel {
   id: number;
   title: string;
+  /**
+   * Six hex digits, lower-case and without a leading `#`, whatever case the server stored — 34
+   * of one live instance's 39 labels hold `0EA5E9`-shaped values, so canonicalising here is what
+   * saves every caller from folding case itself.
+   *
+   * Absent, not `""`, when the label has no colour: the same rule every optional field here
+   * follows, and the one that lets a listing stay as lean as it was.
+   */
+  color?: string;
 }
 
 /**
@@ -210,9 +219,22 @@ export interface RawProject {
   is_archived: boolean;
 }
 
+/**
+ * A label as the API returns one. `description` and `hex_color` are declared — and required, like
+ * `RawTask`'s columns — because the update path has to carry them: `POST /labels/{id}` writes a
+ * fixed `title` / `description` / `hex_color` set and zeroes whatever the payload omits, so a
+ * rename that did not know about the other two would blank them.
+ *
+ * `created_by` (a whole user object) is deliberately absent: nothing here reads it, so nothing
+ * here can leak it.
+ */
 export interface RawLabel {
   id: number;
   title: string;
+  /** Exposed by no tool. Declared so an update can send it back rather than erase it. */
+  description: string;
+  /** Six hex digits without a leading `#`, in whatever case it was stored; `""` for no colour. */
+  hex_color: string;
 }
 
 /**
@@ -338,4 +360,28 @@ export interface TaskFields {
   priority?: number;
   /** RFC3339 timestamp, or `""` to clear the due date. */
   due?: string;
+}
+
+/** Writable label fields, as the REST API accepts them. */
+export interface LabelWrite {
+  title?: string;
+  /** Carried on an update to keep the fixed-column write from erasing it; no tool sets it. */
+  description?: string;
+  /** Six hex digits, no `#`. `""` is no colour. */
+  hex_color?: string;
+}
+
+/**
+ * The same fields in the vocabulary the label tools speak: `color` rather than the `hex_color`
+ * column, and a colour that may be written the way a human writes one. `toLabelWrite` in
+ * `projection` is the one place that bridges the two — and the one place that refuses a colour
+ * Vikunja would take and silently store as something else.
+ *
+ * No `description`: the UI barely surfaces it, and exposing it would drag the whole
+ * markdown/HTML question along. An update preserves it rather than ignoring it.
+ */
+export interface LabelFields {
+  title?: string;
+  /** Six hex digits, with or without a leading `#`. `""` clears the colour. */
+  color?: string;
 }

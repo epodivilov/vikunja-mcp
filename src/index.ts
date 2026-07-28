@@ -7,8 +7,10 @@ import { Resolver } from "./resolver.js";
 import { registerAssignTaskTool } from "./tools/assign-task.js";
 import { registerCommentTaskTool } from "./tools/comment-task.js";
 import { registerCompleteTaskTool } from "./tools/complete-task.js";
+import { registerCreateLabelTool } from "./tools/create-label.js";
 import { registerCreateTaskTool } from "./tools/create-task.js";
 import { registerDeleteCommentTool } from "./tools/delete-comment.js";
+import { registerDeleteLabelTool } from "./tools/delete-label.js";
 import { registerDeleteTaskTool } from "./tools/delete-task.js";
 import { registerGetBoardTool } from "./tools/get-board.js";
 import { registerGetCommentTool } from "./tools/get-comment.js";
@@ -25,6 +27,7 @@ import { registerSetTaskLabelsTool } from "./tools/set-task-labels.js";
 import { registerUnassignTaskTool } from "./tools/unassign-task.js";
 import { registerUnrelateTasksTool } from "./tools/unrelate-tasks.js";
 import { registerUpdateCommentTool } from "./tools/update-comment.js";
+import { registerUpdateLabelTool } from "./tools/update-label.js";
 import { registerUpdateTaskTool } from "./tools/update-task.js";
 
 async function main(): Promise<void> {
@@ -68,12 +71,15 @@ async function main(): Promise<void> {
   registerMoveTaskTool(server, client, resolver);
   registerLabelTaskTool(server, client, resolver);
   registerSetTaskLabelsTool(server, client, resolver);
+  registerCreateLabelTool(server, client, resolver);
+  registerUpdateLabelTool(server, client, resolver);
   registerAssignTaskTool(server, client, resolver);
   registerUnassignTaskTool(server, client, resolver);
   registerRelateTasksTool(server, client, resolver);
   registerUnrelateTasksTool(server, client, resolver);
   registerDeleteTaskTool(server, client, resolver);
   registerDeleteCommentTool(server, client, resolver);
+  registerDeleteLabelTool(server, client, resolver);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

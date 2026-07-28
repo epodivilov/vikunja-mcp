@@ -19,7 +19,7 @@ import { createServer } from "node:http";
 import { describe, it } from "node:test";
 import { VikunjaClient, VikunjaHttpError, resolvePageSize } from "../src/client.ts";
 import type { Config } from "../src/config.ts";
-import type { RawTask } from "../src/types.ts";
+import type { RawLabel, RawTask } from "../src/types.ts";
 
 const config: Config = { baseUrl: "http://vikunja.test/api/v1", token: "t0ken" };
 
@@ -141,6 +141,35 @@ describe("listTasks filter assembly", () => {
     await new VikunjaClient(config, { fetch }).listTasks({ done: false, projectId: 11 });
 
     assert.equal(filterOf(calls), "project_id = 11 && done = false");
+  });
+
+  it("R5: builds the label term from labelId, the way the delete guard counts", async () => {
+    const { fetch, calls } = stubFetch(() => page([], 1));
+    await new VikunjaClient(config, { fetch }).listTasks({ labelId: 45 });
+
+    assert.equal(filterOf(calls), "labels in 45");
+  });
+
+  it("R5: ANDs the label term with the project one, in the same stable order", async () => {
+    const { fetch, calls } = stubFetch(() => page([], 1));
+    await new VikunjaClient(config, { fetch }).listTasks({ projectId: 11, labelId: 45 });
+
+    assert.equal(filterOf(calls), "project_id = 11 && labels in 45");
+  });
+
+  it("R5: refuses a label id that is not a positive integer, before any request", () => {
+    // The same interpolation site as projectId, so the same guard: this value is read back from
+    // a label listing, but the field is public and a filter expression is not a place to trust
+    // a static type.
+    const { fetch, calls } = stubFetch(() => page([], 1));
+    const client = new VikunjaClient(config, { fetch });
+    const lying = (value: unknown) => client.listTasks({ labelId: value as number });
+
+    assert.throws(() => lying(Number.NaN), /positive integer/);
+    assert.throws(() => lying(1.5), /positive integer/);
+    assert.throws(() => lying(0), /positive integer/);
+    assert.throws(() => lying(-3), /positive integer/);
+    assert.equal(calls.length, 0, "nothing was requested");
   });
 
   it("passes a lone escape-hatch expression through verbatim", async () => {
@@ -509,6 +538,107 @@ describe("client transport: task labels", () => {
         assert.match(error.message, /label does not exist/);
         return true;
       },
+    );
+  });
+});
+
+describe("client transport: labels", () => {
+  /** A label as `GET /labels` answers it, with the two columns the update path has to carry. */
+  const stored: RawLabel = {
+    id: 45,
+    title: "specified",
+    description: "groomed and ready",
+    hex_color: "e8e8e8",
+  };
+
+  it("R1: createLabel PUTs the write shape to /labels and returns the parsed label", async () => {
+    const { fetch, calls } = stubFetch(
+      (call) =>
+        new Response(JSON.stringify({ id: 77, description: "", ...(call.body as object) }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    const created = await new VikunjaClient(config, { fetch }).createLabel({
+      title: "x",
+      hex_color: "ff0000",
+    });
+
+    assert.equal(calls.length, 1);
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "PUT");
+    assert.equal(new URL(call.url).pathname, "/api/v1/labels");
+    assert.deepEqual(call.body, { title: "x", hex_color: "ff0000" });
+    assert.equal(created.id, 77);
+    assert.equal(created.title, "x");
+  });
+
+  it("R3: updateLabel merges the patch onto the stored record in one POST", async () => {
+    // `Label.Update` writes Cols("title", "description", "hex_color") and zeroes what the
+    // payload omits, so a rename that sent only the title would blank the other two. The record
+    // comes from the caller — the resolver already listed it — so no read is needed either.
+    const { fetch, calls } = stubFetch(
+      (call) =>
+        new Response(JSON.stringify(call.body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    const updated = await new VikunjaClient(config, { fetch }).updateLabel(stored, {
+      title: "renamed",
+    });
+
+    assert.equal(calls.length, 1, "one write, and no GET /labels/45 in front of it");
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "POST");
+    assert.equal(new URL(call.url).pathname, "/api/v1/labels/45");
+    const body = call.body as RawLabel;
+    assert.equal(body.title, "renamed");
+    assert.equal(body.description, "groomed and ready", "the stored description rode along");
+    assert.equal(body.hex_color, "e8e8e8", "and so did the stored colour");
+    assert.equal(updated.title, "renamed");
+  });
+
+  it("R5: deleteLabel DELETEs the label and resolves on an empty body", async () => {
+    const { fetch, calls } = stubFetch(() => new Response("", { status: 200 }));
+
+    await new VikunjaClient(config, { fetch }).deleteLabel(45);
+
+    assert.equal(calls.length, 1);
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "DELETE");
+    assert.equal(new URL(call.url).pathname, "/api/v1/labels/45");
+  });
+
+  it("R6: a 404 on update or delete surfaces as a VikunjaHttpError with status and code", async () => {
+    const missing = () =>
+      new Response(JSON.stringify({ code: 8002, message: "label does not exist" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    const carries = (error: unknown): boolean => {
+      assert.ok(error instanceof VikunjaHttpError);
+      assert.equal(error.status, 404);
+      assert.equal(error.code, 8002);
+      assert.match(error.message, /label does not exist/);
+      return true;
+    };
+
+    const update = stubFetch(missing);
+    await assert.rejects(
+      new VikunjaClient(config, { fetch: update.fetch }).updateLabel(stored, { title: "x" }),
+      carries,
+    );
+
+    const remove = stubFetch(missing);
+    await assert.rejects(
+      new VikunjaClient(config, { fetch: remove.fetch }).deleteLabel(999),
+      carries,
     );
   });
 });
