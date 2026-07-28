@@ -228,6 +228,48 @@ export class VikunjaClient {
     });
   }
 
+  /**
+   * Writes the same `values` across `taskIds` in one request and one transaction — the only
+   * genuine partial update in this API, and the reason this method exists beside `updateTask`.
+   *
+   * `fields` is what makes it partial. With a non-empty list `updateSingleTask` restores every
+   * column the list does not name from the stored row, so the re-zeroing that forces `updateTask`
+   * into a read-modify-write does not happen here. `UpdateWeb` opens `db.NewSession()`, so the set
+   * either all moves or none of it does: probed on 2.3.0, a call naming one real and one missing
+   * task answered 404 (code 4002) and left the real one exactly as it was.
+   *
+   * An empty `fields` is refused before a request exists, and that refusal is the whole safety of
+   * this method. `updateSingleTask` restores the unlisted columns only `if len(fields) > 0`; with
+   * none, `colsToUpdate` stays the full fourteen and the "Mergo does ignore nil values" block
+   * re-zeroes everything the payload omits. Probed on 2.3.0: HTTP 200, and the task came back with
+   * an empty description, priority 0 and a zeroed due date. So the list has to be exactly the
+   * caller's own patch — never widened, never inferred, and never empty.
+   *
+   * Three things ignore `fields` entirely and are destroyed regardless: assignees, reminders and
+   * the caller's favourite flag. That is not defendable from here — one `values` object serves the
+   * whole set, so there is nothing to echo back per task — which is why the layer above refuses a
+   * set carrying any of them rather than this one trying to preserve them.
+   *
+   * The 200 body is the request struct rendered back, with tasks that never went through
+   * `setIdentifier` (`identifier: ""`, `labels: null`). It is discarded; callers read the tasks
+   * back, as they do after every other write here.
+   */
+  async bulkUpdateTasks(
+    taskIds: readonly number[],
+    fields: readonly string[],
+    values: TaskWrite,
+  ): Promise<void> {
+    if (fields.length === 0) {
+      throw new Error(
+        "A bulk update has to name the fields it writes: an empty field list makes Vikunja write its whole column set and re-zero everything the payload omits, stripping the description, priority and dates off every task named. Build the list from the patch's own keys.",
+      );
+    }
+
+    await this.#request<unknown>("POST", "/tasks/bulk", {
+      body: { task_ids: [...taskIds], fields: [...fields], values },
+    });
+  }
+
   async deleteTask(id: number): Promise<void> {
     await this.#request<unknown>("DELETE", `/tasks/${id}`);
   }

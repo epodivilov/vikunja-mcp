@@ -253,6 +253,19 @@ export interface RawTask {
    */
   assignees: RawUser[] | null;
   /**
+   * The task's reminders, null when it has none. Nothing here reads inside one — only whether the
+   * list is empty — so the rows stay `unknown`: they are a shape the model must never see.
+   *
+   * Declared, together with `is_favorite`, for one reader: the bulk-update blocker check.
+   * `POST /tasks/bulk` ignores its own `fields` list for these two and for `assignees`, deleting
+   * every reminder and assignee and dropping the task out of the caller's favourites whatever it
+   * was asked to write. Optional because a write response does not populate them, and the check
+   * treats that absence as blocking rather than as "none".
+   */
+  reminders?: unknown[] | null;
+  /** Whether the *calling* user has favourited the task; per-user, unlike the two fields above. */
+  is_favorite?: boolean;
+  /**
    * Related tasks, keyed by relation kind. Both read paths embed them: `GET /tasks/{id}`, and
    * the `GET /tasks` collection a key resolves through (`addRelatedTasksToTasks`), which
    * initializes the map and so sends at least `{}`. Three shapes mean "none": absent (an

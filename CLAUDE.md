@@ -62,6 +62,7 @@ primary reason this project exists.
 | `vikunja_get_comment` | read | one comment, by task + numeric `commentId` |
 | `vikunja_create_task` | write | markdown description accepted; `assignees` ride along in the create |
 | `vikunja_update_task` | write | partial fields incl. `done` |
+| `vikunja_bulk_update_tasks` | write | one `done`/`priority`/`due` across many tasks, through `POST /tasks/bulk` — one transaction, the API's only genuine partial write. Refuses the whole call when any named task carries assignees or reminders or is a favourite: the endpoint destroys all three |
 | `vikunja_complete_task` | write | convenience over update |
 | `vikunja_comment_task` | write | creates a comment; markdown body |
 | `vikunja_update_comment` | write | replaces a comment's body; markdown in, HTML stored; `destructiveHint` — no history to recover the old text from |
@@ -85,7 +86,10 @@ The comment tools' shared body — `resolveCommentTarget` and `applyCommentUpdat
 `tools/task-target.ts`, not in the four tool files, and that placement is deliberate: a module
 whose only runtime import is zod is one a `node --test` suite can load, and a tool file is not.
 Anything worth proving goes there; what stays in a tool file (the schema, the annotations, the
-one call) is unproved by construction.
+one call) is unproved by construction. `vikunja_bulk_update_tasks` follows the same rule for the
+same reason — `resolveBulkTargets`, `findBulkBlockers` and `applyBulkUpdate` are all in that
+module, because the ordering the tool depends on (resolve, vet, *then* write) is exactly what a
+restated test body would leave unproved.
 
 ## Invariants
 
@@ -130,8 +134,15 @@ collapse the whole key-resolution dance below into one request.)
 - There is no "get by key" endpoint, but `index` is filterable: `GET /tasks` with
   `filter=project_id = <id> && index = <n>` answers with exactly that one task, done or not, so
   a key resolves in one request rather than by walking the project's task list. Verified on
-  2.3.0. Still match `index` on the result instead of taking row 0 — a build that ignored the
-  term would answer with the whole project, and row 0 of that is a different task. Cache the
+  2.3.0. Several indexes travel in one request too: `index in 24, 25, 26` is legal, whitespace
+  included — the parser rewrites `in` to `?=`, and its auto-quoting regex captures everything up
+  to `&`, `|` or a paren, so the comma-separated list survives as one quoted value that
+  `getNativeValueForTaskField` splits and `getValueForField` trims. Probed live, with and without
+  spaces; `resolver.resolveTasks` uses it to resolve a whole key set at one request per project.
+  Still match `index` on the result instead of taking row 0 — a build that ignored the
+  term would answer with the whole project, and row 0 of that is a different task, which a
+  *batched* read makes cheaper to get wrong rather than harder: zipping the answer against the
+  requested keys by position mis-assigns every one of them. Cache the
   identifier -> project map. Do NOT use `GET /projects/{id}/tasks`: it still answers, but v2.3.0
   documents only `PUT` on that path. Do NOT use `GET /projects/{id}/views/{view}/tasks` either —
   it applies the view's own filter (the default List view hides done tasks) and silently returns
@@ -196,6 +207,58 @@ collapse the whole key-resolution dance below into one request.)
   list deletes them. So `{ done: true }` alone strips the task bare — read the task and send it
   back with the patch applied, which is what `client.updateTask` does. The genuine partial path
   (an explicit `fields` list) is reachable only from `POST /tasks/bulk`.
+- **`POST /tasks/bulk` is the one genuine partial write, and its `fields` list is load-bearing.**
+  Body is `{ task_ids, fields, values }`. With a non-empty `fields`, `updateSingleTask` restores
+  every column the list does not name from the stored row — probed on 2.3.0: `fields: ["done"]`
+  left description and priority untouched. With an **empty** one it does not: the restore is
+  guarded by `if len(fields) > 0`, so `colsToUpdate` stays the full 14 and the "Mergo does ignore
+  nil values" block re-zeroes everything the payload omits. Probed: `{ task_ids: [659], fields:
+  [], values: { done: true } }` answered **HTTP 200** and left the task with `description: ""`,
+  `priority: 0` and a zeroed due date; only the title survived (mergo keeps a non-empty stored
+  value). A field listed but absent from `values` writes its zero value, which is exactly how
+  `priority: 0` and a cleared due date have to be sent — and exactly why the list must be the
+  patch's own keys, never widened. `client.bulkUpdateTasks` refuses an empty list before it builds
+  a request.
+- **It is one transaction.** `UpdateWeb` opens `db.NewSession()` and rolls back on any error, so
+  the set all moves or none of it does. `BulkTask.CanUpdate` only requires that *at least one* id
+  exists (400, code 4004 when none do — probed with an empty `task_ids`), and `updateSingleTask`
+  then raises `ErrTaskDoesNotExist` (404, code 4002) for a missing one inside the transaction:
+  probed with `task_ids: [659, 999999]`, and 659's priority was unchanged afterwards. So never
+  pre-filter the ids to "the ones that still exist" — that turns an all-or-nothing call into a
+  partial write.
+- **Three things ignore `fields` entirely, and the endpoint destroys all three.** In `tasks.go`
+  and `task_assignees.go` at v2.3.0, all before or outside the `fields` block:
+  `updateTaskAssignees` deletes every assignee when the payload carries none, `updateReminders`
+  unconditionally deletes the reminders and re-inserts whatever `values` held (nothing), and
+  `if !t.IsFavorite && wasFavorite` drops the task out of the caller's favourites. Probed: a task
+  with one assignee, one reminder and `is_favorite: true`, bulk-updated on `priority` alone, came
+  back with none of the three. `POST /tasks/{id}` behaves the same way and is saved only by
+  echoing the whole stored task back, which a bulk call cannot do — one `values` object serves the
+  whole set. Hence the refusal in `findBulkBlockers` rather than a silent strip. `is_favorite` is
+  per-user (`wasFavorite` is computed for the calling token's user); reminders and assignees are
+  task-global and are destroyed for everyone. All three are populated by `addMoreInfoToTasks`,
+  which both read paths go through, and by no write response — so the check runs on rows from a
+  read and treats an absent field as blocking, or it fails open on exactly the path it covers.
+- **The 200 body is not the answer**, like every other write here: the handler renders the whole
+  `BulkTask` struct back — `task_ids`, `fields`, `values` and a `tasks` array whose rows never went
+  through `setIdentifier`. Probed: every row came back with `identifier: ""` and `labels: null`.
+  Read the tasks back instead.
+- Two more bulk facts worth not re-deriving. `done_at` is **not** writable — naming it answers 400
+  with code 4027 (`ErrInvalidTaskColumn`); `updateDone` appends it itself when `done` changes, and
+  the done-bucket move is the server's too. And `values` needs no title: `UpdateWeb` validates the
+  bound struct through govalidator and `Task.Title` carries `minstringlength(1)`, but an empty
+  value is skipped rather than required — probed, `values: { done: true }` answered 200 and left
+  every title alone. Nothing at 2.3.0 raises `ErrBulkTasksMustBeInSameProject` (code 4003) either:
+  `CanUpdate` collects the distinct projects and checks `CanWrite` on each, so a cross-project
+  call is one request and is accepted.
+- **An archived project needs no refusal of ours on the bulk path — but only because the `ids`
+  escape hatch is not batched.** A key in one is already unresolvable (`GET /tasks` omits archived
+  projects, and `resolveTasks` says so). An id read through `GET /tasks/{id}` resolves fine, and
+  the write is then refused by the server: `BulkTask.CanUpdate` calls `Project.CanWrite`, which
+  returns `ErrProjectIsArchived` (412, code 3008) — read out of the source, not probed — and the
+  transaction takes the whole call with it, which is the answer we want. Batch those ids through
+  `filter=id in …` instead and it breaks silently: the collection answers `[]`, and a task that
+  exists is reported missing. That is why `resolveBulkTargets` spends one request per id.
 - Project update differs again: it writes a fixed column set, so omitted numeric fields (e.g.
   `position`) are zeroed — but an omitted `description` is preserved. Send the fields you intend
   to keep.
