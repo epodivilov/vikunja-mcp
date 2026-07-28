@@ -142,9 +142,15 @@ export interface LeanLabel {
   id: number;
   title: string;
   /**
-   * Six hex digits, lower-case and without a leading `#`, whatever case the server stored — 34
-   * of one live instance's 39 labels hold `0EA5E9`-shaped values, so canonicalising here is what
-   * saves every caller from folding case itself.
+   * The stored colour, canonicalised: trimmed, `#` stripped, lower-cased — 34 of one live
+   * instance's 39 labels hold `0EA5E9`-shaped values, so folding case here is what saves every
+   * caller from doing it.
+   *
+   * Canonicalised, **not validated**. Six hex digits is what the write path demands
+   * (`parseHexColor`); the read path reports whatever is stored, because the server accepts more
+   * than it can render — `red` passes its `runelength(0|7)` check and is stored verbatim. A label
+   * created outside this server can therefore surface a value no renderer understands, and
+   * rewriting or dropping it here would be inventing data the instance does not hold.
    *
    * Absent, not `""`, when the label has no colour: the same rule every optional field here
    * follows, and the one that lets a listing stay as lean as it was.

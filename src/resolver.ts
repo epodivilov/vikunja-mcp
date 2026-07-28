@@ -431,11 +431,18 @@ export class Resolver {
    * than local damage: `resolveLabelIds` refuses an ambiguous title, so a second "bug" makes
    * *both* labels unaddressable by title in `create_task`, `label_task` and `set_task_labels` at
    * once.
+   *
+   * Answers with the title it actually checked — trimmed — so the caller writes the same string
+   * this vetted rather than the raw one. The tool schema trims too, but that is a guarantee
+   * living in a file no test can load; taking it from here keeps the check and the write on one
+   * source of truth.
    */
-  async checkLabelTitleAvailable(title: string): Promise<void> {
+  async checkLabelTitleAvailable(title: string): Promise<string> {
     const wanted = parseLabelTitle(title);
 
     checkTitleAvailable(await this.#client.listLabels(), wanted);
+
+    return wanted;
   }
 
   /**

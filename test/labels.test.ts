@@ -305,6 +305,19 @@ describe("create_label data path", () => {
     assert.equal(calls.length, 0, "the server would have accepted it; nothing was asked of it");
   });
 
+  it("R1/R4: writes the title it checked, not the padded one it was handed", async () => {
+    // The availability check compares trimmed, so writing the caller's raw string would store
+    // something other than what was vetted. The tool schema trims as well, but that guarantee
+    // lives in a file no test can load — this pins it where it is provable.
+    const { client, resolver, calls } = stack();
+
+    const created = await createLabel(client, resolver, "  vmcp23-padded  ");
+
+    const writes = calls.filter((call) => call.method === "PUT");
+    assert.deepEqual(writes[0]?.body, { title: "vmcp23-padded" });
+    assert.equal(created.title, "vmcp23-padded");
+  });
+
   it("R2: an empty colour is not a refusal — the label is simply created without one", async () => {
     const { client, resolver, calls } = stack();
 
@@ -415,7 +428,19 @@ describe("delete_label data path", () => {
   it("R5: refuses while tasks carry the label, naming how many, and deletes nothing", async () => {
     const { client, resolver, calls, stored } = stack(LABELS, CARRYING);
 
-    await assert.rejects(() => deleteLabel(client, resolver, "specified"), /3 task/);
+    await assert.rejects(
+      () => deleteLabel(client, resolver, "specified"),
+      (error: Error) => {
+        assert.match(error.message, /3 task/, "names how many carry it");
+        assert.match(error.message, /force/, "and how to proceed anyway");
+        // The alternative it offers has to be the incremental one. `set_task_labels` replaces a
+        // task's whole label set, so a caller following that advice across N tasks would have to
+        // read each task's labels back first or silently drop the rest.
+        assert.match(error.message, /vikunja_label_task/, "points at the incremental tool");
+        assert.doesNotMatch(error.message, /vikunja_set_task_labels/, "not the wholesale one");
+        return true;
+      },
+    );
 
     assert.ok(!calls.some((call) => call.method === "DELETE"), "nothing was deleted");
     assert.ok(

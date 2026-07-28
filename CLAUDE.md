@@ -91,9 +91,17 @@ Anything worth proving goes there; what stays in a tool file (the schema, the an
 one call) is unproved by construction.
 
 The three label tools follow the same rule through `tools/label-fields.ts`: the shared `label`
-and colour argument shapes, plus the two refusals that need no server at all — an update naming
-no field, and the delete guard's decision given a task count and `force`. Same constraint, same
-shape: zod plus type-only imports, and a test imports both refusals for real.
+and colour argument shapes, the two refusals that need no server at all — an update naming no
+field, and the delete guard's decision given a task count and `force` — **and the three tool
+bodies themselves**, `applyLabelCreate` / `applyLabelUpdate` / `applyLabelDelete`. Same
+constraint, same shape: zod plus type-only imports, with the projection handed in as a parameter
+rather than imported, and a test that calls the shipped functions rather than a copy of them.
+
+The bodies belong there for a reason worth stating plainly, because the first cut of this work
+put them in the registration files and a green suite said nothing: the duplicate-title check, the
+delete guard and the rename-side title check could each be deleted with all 337 tests still
+passing. A tool file is unproved by construction, so what it holds must be a schema, its
+annotations and one call — nothing that can be wrong.
 
 ## Invariants
 

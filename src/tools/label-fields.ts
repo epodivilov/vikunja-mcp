@@ -79,7 +79,7 @@ export function checkLabelDeletable(label: RawLabel, taskCount: number, force: b
   }
 
   throw new Error(
-    `"${label.title}" (id ${label.id}) is on ${taskCount} task${taskCount === 1 ? "" : "s"}, and deleting a label takes it off every one of them — Vikunja has no undo for that. Pass { force: true } to delete it anyway, or use vikunja_set_task_labels to take it off those tasks first. Tasks in archived projects are not counted, so the real number may be higher.`,
+    `"${label.title}" (id ${label.id}) is on ${taskCount} task${taskCount === 1 ? "" : "s"}, and deleting a label takes it off every one of them — Vikunja has no undo for that. Pass { force: true } to delete it anyway, or take it off those tasks first with vikunja_label_task { remove: ["${label.title}"] }, which leaves their other labels alone. Tasks in archived projects are not counted, so the real number may be higher.`,
   );
 }
 
@@ -121,9 +121,11 @@ export async function applyLabelCreate(
   projection: LabelProjection,
   fields: { title: string; color?: string | undefined },
 ): Promise<LeanLabel> {
-  await resolver.checkLabelTitleAvailable(fields.title);
+  // The vetted title is written, not the raw one: the check trims before comparing, so writing
+  // the caller's string would store something other than what was checked for availability.
+  const title = await resolver.checkLabelTitleAvailable(fields.title);
 
-  const created = await client.createLabel(projection.toLabelWrite(fields));
+  const created = await client.createLabel(projection.toLabelWrite({ ...fields, title }));
 
   return projection.toLeanLabel(created);
 }
