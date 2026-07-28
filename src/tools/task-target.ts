@@ -238,6 +238,10 @@ export function findBulkBlockers(tasks: readonly RawTask[]): BulkBlocker[] {
     }
 
     if (reasons.length > 0) {
+      // The fallback is unreachable on a read: `setIdentifier` fills `identifier` in itself,
+      // down to `#<index>` for a project with no prefix, so `identifier || fallback` never takes
+      // it. It is kept for the one row that did NOT come from a read — precisely what the
+      // fail-closed branches above report, and the only row with nothing else to call it by.
       blockers.push({ ref: task.identifier || `task ${task.id}`, reasons });
     }
   }
