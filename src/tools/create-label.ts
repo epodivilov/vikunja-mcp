@@ -7,14 +7,15 @@
  *
  * Two refusals here are ours rather than the server's — an empty title and a title another label
  * already holds — because Vikunja accepts both with a 201, and both leave a label that no tool
- * can name afterwards.
+ * can name afterwards. Both live in `applyLabelCreate`, in a module the test suite can load; this
+ * file is the schema, the annotations and one call.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
 import { toLabelWrite, toLeanLabel } from "../projection.js";
 import type { Resolver } from "../resolver.js";
-import { labelColorField, labelTitleField } from "./label-fields.js";
+import { applyLabelCreate, labelColorField, labelTitleField } from "./label-fields.js";
 import { jsonResult } from "./result.js";
 
 export function registerCreateLabelTool(
@@ -47,16 +48,9 @@ export function registerCreateLabelTool(
       // is there to prevent.
       annotations: { destructiveHint: false, idempotentHint: false },
     },
-    async ({ title, color }) => {
-      // Both refusals before the write: an unusable title costs no request at all, and a
-      // duplicate one costs a listing rather than a label nobody can name.
-      await resolver.checkLabelTitleAvailable(title);
-
-      // The create response is the label as stored, with the colour normalized server-side — so
-      // unlike a task create, there is nothing here a read-back would correct.
-      const created = await client.createLabel(toLabelWrite({ title, color }));
-
-      return jsonResult(toLeanLabel(created));
-    },
+    async ({ title, color }) =>
+      jsonResult(
+        await applyLabelCreate(client, resolver, { toLabelWrite, toLeanLabel }, { title, color }),
+      ),
   );
 }

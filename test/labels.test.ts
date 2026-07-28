@@ -3,11 +3,17 @@
  * the exact layers `vikunja_create_label`, `vikunja_update_label` and `vikunja_delete_label` wire
  * together — over a single routing `fetch`.
  *
- * Honest about what is and is not covered: `src/tools/create-label.ts` and its two siblings cannot
- * be imported under `node --test` (they carry `.js` value specifiers the type-stripping loader
- * will not resolve to `.ts`), so their schemas, descriptions and annotations are unproved here.
- * What IS proved is everything they delegate to — including the two refusals that need no server
- * at all, imported for real from `src/tools/label-fields.ts`, whose only runtime import is zod.
+ * Nothing below is a transcription. The three tool bodies are `applyLabelCreate`,
+ * `applyLabelUpdate` and `applyLabelDelete`, imported for real from `src/tools/label-fields.ts` —
+ * whose only runtime import is zod — and the projection reaches them exactly as the tool files
+ * hand it over, so a refusal deleted from one of those functions fails these tests instead of
+ * shipping. A hand-mirrored copy of a tool body would pass whatever the tool then did; that is the
+ * whole reason the bodies live there rather than in the registration files.
+ *
+ * What remains unproved here is what `src/tools/create-label.ts` and its two siblings still hold:
+ * their schemas, descriptions and annotations, and the one binding each passes in (`toLabelWrite`
+ * / `toLeanLabel`). Those files cannot be imported under `node --test` — they carry `.js` value
+ * specifiers the type-stripping loader will not resolve to `.ts`.
  *
  * The stub reproduces the three server behaviours the design leans on, and each of them is a trap
  * a friendlier fake would hide:
@@ -24,8 +30,23 @@ import { VikunjaClient } from "../src/client.ts";
 import type { Config } from "../src/config.ts";
 import { toLabelWrite, toLeanLabel } from "../src/projection.ts";
 import { type LabelRef, Resolver } from "../src/resolver.ts";
-import { checkLabelDeletable, checkLabelPatch } from "../src/tools/label-fields.ts";
+import {
+  type DeletedLabel,
+  type LabelProjection,
+  applyLabelCreate,
+  applyLabelDelete,
+  applyLabelUpdate,
+  checkLabelDeletable,
+  checkLabelPatch,
+} from "../src/tools/label-fields.ts";
 import type { LabelFields, LeanLabel, RawLabel, RawTask } from "../src/types.ts";
+
+/**
+ * The projection exactly as the three tool files hand it over. Named here rather than inlined so
+ * that "the tool passes the real thing" is one fact in one place — the only part of the wiring
+ * these tests cannot see.
+ */
+const PROJECTION: LabelProjection = { toLabelWrite, toLeanLabel };
 
 const config: Config = { baseUrl: "http://vikunja.test/api/v1", token: "t0ken" };
 
@@ -60,14 +81,6 @@ const FEATURE = label(5, "feature", "e8e8e8");
 
 /** The instance as these tests see it: distinct titles, which is what the real one has. */
 const LABELS: RawLabel[] = [FEATURE, SPECIFIED, label(46, "in-progress")];
-
-/** What `vikunja_delete_label` answers with once it has deleted. */
-interface DeletedLabel {
-  deleted: true;
-  id: number;
-  title: string;
-  detachedFrom: number;
-}
 
 /**
  * One routing fetch over a mutable label store and a fixed set of tasks, recording every request.
@@ -188,43 +201,35 @@ function stack(
   };
 }
 
-/** The create_label body: refuse an unusable title, write, project the answer. */
-async function createLabel(
+/**
+ * The three shipped tool bodies, called with the projection the tool files pass. Thin wrappers so
+ * a case reads as the tool call it stands for — the work is `applyLabel*`, not anything here.
+ */
+function createLabel(
   client: VikunjaClient,
   resolver: Resolver,
   title: string,
   color?: string,
 ): Promise<LeanLabel> {
-  await resolver.checkLabelTitleAvailable(title);
-  return toLeanLabel(await client.createLabel(toLabelWrite({ title, color })));
+  return applyLabelCreate(client, resolver, PROJECTION, { title, color });
 }
 
-/** The update_label body: refuse an empty patch, resolve the target, merge, project. */
-async function updateLabel(
+function updateLabel(
   client: VikunjaClient,
   resolver: Resolver,
   ref: LabelRef,
   fields: LabelFields,
 ): Promise<LeanLabel> {
-  checkLabelPatch(fields);
-  const current = await resolver.resolveLabel(ref, fields.title);
-  return toLeanLabel(await client.updateLabel(current, toLabelWrite(fields)));
+  return applyLabelUpdate(client, resolver, PROJECTION, ref, fields);
 }
 
-/** The delete_label body: resolve, count what carries it, guard, delete, report. */
-async function deleteLabel(
+function deleteLabel(
   client: VikunjaClient,
   resolver: Resolver,
   ref: LabelRef,
   force = false,
 ): Promise<DeletedLabel> {
-  const target = await resolver.resolveLabel(ref);
-  const carrying = await client.listTasks({ labelId: target.id });
-
-  checkLabelDeletable(target, carrying.length, force);
-  await client.deleteLabel(target.id);
-
-  return { deleted: true, id: target.id, title: target.title, detachedFrom: carrying.length };
+  return applyLabelDelete(client, resolver, ref, force);
 }
 
 describe("Resolver.resolveLabel", () => {
@@ -466,8 +471,70 @@ describe("delete_label data path", () => {
 });
 
 /**
+ * The composition itself, pinned case by case.
+ *
+ * Each of these fails against one specific mutation of a tool body — the four that were possible
+ * while those bodies lived in the registration files, where every one of them left the suite
+ * green:
+ *
+ * 1. `applyLabelCreate` stops calling `checkLabelTitleAvailable`.
+ * 2. `applyLabelDelete` stops calling `checkLabelDeletable`.
+ * 3. `applyLabelUpdate` stops passing `title` to `resolveLabel`.
+ * 4. `applyLabelDelete` reports a hardcoded `detachedFrom: 0`.
+ *
+ * The overlap with the data-path cases above is deliberate: those describe what a caller sees,
+ * these say which line of the composition holds them up.
+ */
+describe("tool bodies: the composition a registration file cannot be trusted with", () => {
+  it("R4: create checks the title against the instance before it writes anything", async () => {
+    // Mutation 1: drop the refusal and the create goes through, leaving two labels that share a
+    // title — and every other tool then unable to name either of them.
+    const { client, resolver, calls, stored } = stack();
+
+    await assert.rejects(() => createLabel(client, resolver, "FEATURE"), /id 5/);
+
+    assert.ok(!calls.some((call) => call.method === "PUT"), "the write never happened");
+    assert.equal(stored().length, LABELS.length, "and no label was added");
+  });
+
+  it("R5: delete consults the guard, so a label in use survives a call without force", async () => {
+    // Mutation 2: drop the guard and this deletes a label off three tasks, silently.
+    const { client, resolver, calls, stored } = stack(LABELS, [task(600, 1, [SPECIFIED])]);
+
+    await assert.rejects(() => deleteLabel(client, resolver, 45), /1 task\b/);
+
+    assert.ok(!calls.some((call) => call.method === "DELETE"));
+    assert.ok(stored().some((entry) => entry.id === 45));
+  });
+
+  it("R4: update hands the new title to the resolver, which is the whole rename check", async () => {
+    // Mutation 3: resolve without the title and the rename lands on a title label 5 holds. The
+    // resolve itself still succeeds either way, so only the write's absence detects it.
+    const { client, resolver, calls, stored } = stack();
+
+    await assert.rejects(() => updateLabel(client, resolver, 45, { title: "Feature " }), /id 5/);
+
+    assert.ok(!calls.some((call) => call.method === "POST"), "no write was issued");
+    assert.equal(stored().find((entry) => entry.id === 45)?.title, "specified");
+  });
+
+  it("R5: the delete answer carries the count it guarded on, not a constant", async () => {
+    // Mutation 4: a hardcoded `detachedFrom: 0` reads as "nothing was affected" for a call that
+    // just took the label off two tasks.
+    const { client, resolver } = stack(LABELS, [
+      task(600, 1, [SPECIFIED]),
+      task(601, 2, [SPECIFIED]),
+    ]);
+
+    const answer = await deleteLabel(client, resolver, 45, true);
+
+    assert.equal(answer.detachedFrom, 2, "the number the guard counted is the number reported");
+  });
+});
+
+/**
  * The two refusals that need no server at all, exercised directly rather than through a flow —
- * they are the whole of what `src/tools/label-fields.ts` exists to make provable.
+ * the pieces of `src/tools/label-fields.ts` that decide without asking anything.
  */
 describe("label-fields refusals", () => {
   it("R3: an update naming no field is refused, and one naming either is not", () => {

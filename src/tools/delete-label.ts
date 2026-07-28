@@ -9,12 +9,15 @@
  * Hence the count and the `force` guard: a label in use is refused once, with the number attached,
  * so the caller decides knowing what it costs. To take a label off one task, use
  * `vikunja_label_task` instead — this tool is for retiring the label everywhere.
+ *
+ * The count, the guard and the answer are `applyLabelDelete`, in a module the test suite can load;
+ * this file is the schema, the annotations and one call.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { VikunjaClient } from "../client.js";
 import type { Resolver } from "../resolver.js";
-import { checkLabelDeletable, labelTargetShape } from "./label-fields.js";
+import { applyLabelDelete, labelTargetShape } from "./label-fields.js";
 import { jsonResult } from "./result.js";
 
 export function registerDeleteLabelTool(
@@ -46,30 +49,7 @@ export function registerDeleteLabelTool(
       }),
       annotations: { destructiveHint: true, idempotentHint: false },
     },
-    async ({ label, force }) => {
-      // Read first: the label has to be named in the answer, and it cannot be read afterwards.
-      const target = await resolver.resolveLabel(label);
-
-      // The count costs a full task listing — it exhausts pagination and parses every matching
-      // row — which buys the guard on a rare, irreversible call. Nothing here is projected to the
-      // model; only the number leaves this function. `x-pagination-result-count` would be the
-      // cheap-looking shortcut and it is wrong: it reports the rows in the page just returned,
-      // so at per_page=1 a label on 142 tasks would be guarded as "1 task".
-      const carrying = await client.listTasks({ labelId: target.id });
-
-      checkLabelDeletable(target, carrying.length, force ?? false);
-
-      await client.deleteLabel(target.id);
-
-      // "detachedFrom" is what the caller observes, and deliberately not a claim about the
-      // database: the label_tasks rows survive the delete — the tasks simply stop reporting a
-      // label the read can no longer join.
-      return jsonResult({
-        deleted: true,
-        id: target.id,
-        title: target.title,
-        detachedFrom: carrying.length,
-      });
-    },
+    async ({ label, force }) =>
+      jsonResult(await applyLabelDelete(client, resolver, label, force ?? false)),
   );
 }
