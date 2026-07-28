@@ -62,7 +62,7 @@ primary reason this project exists.
 | `vikunja_get_comment` | read | one comment, by task + numeric `commentId` |
 | `vikunja_create_task` | write | markdown description accepted; `assignees` ride along in the create |
 | `vikunja_update_task` | write | partial fields incl. `done` |
-| `vikunja_bulk_update_tasks` | write | one `done`/`priority`/`due` across many tasks, through `POST /tasks/bulk` — one transaction, the API's only genuine partial write. Refuses the whole call when any named task carries assignees or reminders or is a favourite: the endpoint destroys all three |
+| `vikunja_bulk_update_tasks` | write | one `done`/`priority`/`due` across many tasks, through `POST /tasks/bulk` — one transaction, the API's only genuine partial write. Refuses the whole call when any named task carries assignees or reminders or is a favourite (the endpoint destroys all three), and — only when `done` is being set — when any of them repeats (the completion does not stick) |
 | `vikunja_complete_task` | write | convenience over update |
 | `vikunja_comment_task` | write | creates a comment; markdown body |
 | `vikunja_update_comment` | write | replaces a comment's body; markdown in, HTML stored; `destructiveHint` — no history to recover the old text from |
@@ -239,10 +239,26 @@ collapse the whole key-resolution dance below into one request.)
   task-global and are destroyed for everyone. All three are populated by `addMoreInfoToTasks`,
   which both read paths go through, and by no write response — so the check runs on rows from a
   read and treats an absent field as blocking, or it fails open on exactly the path it covers.
+- **A completion does not stick on a repeating task, and the `fields` list is why.** The server
+  computes the roll-forward and returns the new dates in the 200 body, then persists only the
+  columns `fields` names — so the roll is discarded. Probed on 2.3.0 against a task with
+  `repeat_after: 86400`: the body carried `due_date: 2026-07-29`, the stored row still had
+  `2026-07-20`, `done` stayed `false`, and `done_at` was stamped anyway. The task is left open,
+  overdue and marked as completed at the same time. `POST /tasks/{id}` rolls it correctly, so this
+  is the bulk path alone; a single-task control on an identical task moved due, start and end.
+  Hence the fourth, *conditional* refusal in `findBulkBlockers`: repeating tasks are refused only
+  when the patch names `done`, since a `priority` or a `due` lands on them like any other task.
+  **Detecting one needs both fields.** `repeat_mode` is `0` (by the `repeat_after` interval), `1`
+  (monthly, *ignoring* `repeat_after`) or `3` (from today, by the interval) — read out of the
+  running server's `docs.json`. So a monthly-repeating task is `{ repeat_mode: 1, repeat_after: 0 }`
+  and a check on the interval alone calls it non-repeating. Both fields are plain columns rather
+  than anything `addMoreInfoToTasks` enriches, so both read paths always send them, as zero values
+  when the task does not repeat — probed on both paths.
 - **The 200 body is not the answer**, like every other write here: the handler renders the whole
   `BulkTask` struct back — `task_ids`, `fields`, `values` and a `tasks` array whose rows never went
   through `setIdentifier`. Probed: every row came back with `identifier: ""` and `labels: null`.
-  Read the tasks back instead.
+  Read the tasks back instead — and note the repeating case above is what makes that more than
+  hygiene: echoing the body would have reported a due date that is not in the database.
 - Two more bulk facts worth not re-deriving. `done_at` is **not** writable — naming it answers 400
   with code 4027 (`ErrInvalidTaskColumn`); `updateDone` appends it itself when `done` changes, and
   the done-bucket move is the server's too. And `values` needs no title: `UpdateWeb` validates the
