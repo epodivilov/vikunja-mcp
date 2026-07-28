@@ -253,6 +253,43 @@ export interface RawTask {
    */
   assignees: RawUser[] | null;
   /**
+   * The task's reminders, null when it has none. Nothing here reads inside one — only whether the
+   * list is empty — so the rows stay `unknown`: they are a shape the model must never see.
+   *
+   * Declared, together with `is_favorite`, for one reader: the bulk-update blocker check.
+   * `POST /tasks/bulk` ignores its own `fields` list for these two and for `assignees`, deleting
+   * every reminder and assignee and dropping the task out of the caller's favourites whatever it
+   * was asked to write. Optional because a write response does not populate them, and the check
+   * treats that absence as blocking rather than as "none".
+   */
+  reminders?: unknown[] | null;
+  /** Whether the *calling* user has favourited the task; per-user, unlike the two fields above. */
+  is_favorite?: boolean;
+  /**
+   * How the task repeats. Read by one caller: the bulk-update blocker check, and only when the
+   * patch would complete a task that is not already done.
+   *
+   * **Both fields are needed, and reading only `repeat_after` is the trap.** `repeat_mode` is
+   * `0` (repeat by the `repeat_after` interval), `1` (repeat monthly, *ignoring* `repeat_after`)
+   * or `2` (repeat from the current date rather than the last set one, still by `repeat_after`).
+   * So a monthly-repeating task is `repeat_mode: 1` with `repeat_after: 0`, and a check on the
+   * interval alone would let precisely that task through — which is what `isRepeating` exists to
+   * stop.
+   *
+   * Take the values from `models.TaskRepeatMode` in the server's `docs.json`
+   * (`enum: [0, 1, 2]`, `x-enum-varnames: [Default, Month, FromCurrentDate]`) and **not** from the
+   * prose `description` of `repeat_mode` in the same file, which says "3 = repeats from the
+   * current date". That is Vikunja's own typo and it contradicts the enum three lines away.
+   *
+   * Unlike `reminders` and `is_favorite` these are plain columns rather than fields
+   * `addMoreInfoToTasks` enriches, so both read paths always send them, as zero values when the
+   * task does not repeat — probed live on both paths. Optional and fail-closed anyway, for the
+   * same reason the two above are: a row that carries neither did not come from a read.
+   */
+  repeat_after?: number;
+  /** See `repeat_after`: `0` interval, `1` monthly (ignores the interval), `2` from today. */
+  repeat_mode?: number;
+  /**
    * Related tasks, keyed by relation kind. Both read paths embed them: `GET /tasks/{id}`, and
    * the `GET /tasks` collection a key resolves through (`addRelatedTasksToTasks`), which
    * initializes the map and so sends at least `{}`. Three shapes mean "none": absent (an

@@ -25,7 +25,7 @@ export function registerUpdateTaskTool(
     {
       title: "Update task",
       description:
-        "Change fields of an existing task. Fields left out keep their current value; fields passed replace it. Labels are not task fields and cannot be changed here — use vikunja_label_task to add or remove some, or vikunja_set_task_labels to replace the whole set. Assignees cannot be changed here either. Passing either is an error rather than a silent no-op.",
+        "Change fields of an existing task. Fields left out keep their current value; fields passed replace it. Labels are not task fields and cannot be changed here — use vikunja_label_task to add or remove some, or vikunja_set_task_labels to replace the whole set. Assignees cannot be changed here either. Passing either is an error rather than a silent no-op. To set the same done, priority or due across several tasks, use vikunja_bulk_update_tasks: it is one call and one transaction instead of one of these per task — though this tool remains the one that can touch a task carrying assignees or reminders, which the bulk endpoint destroys.",
       // Strict, so a field this tool does not implement is refused instead of dropped. A
       // non-strict schema would answer `{ labels: [...] }` with a success and an unchanged
       // task — Vikunja's own task update never touches the label link table — and the

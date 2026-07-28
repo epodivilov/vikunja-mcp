@@ -818,6 +818,87 @@ describe("client transport: comments", () => {
   });
 });
 
+describe("client transport: bulk task update", () => {
+  /** What `POST /tasks/bulk` answers: 200 echoing the whole BulkTask struct it was handed. */
+  function bulkEcho(call: StubCall): Response {
+    return new Response(JSON.stringify(call.body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("R1: writes the whole set with one POST carrying task_ids, fields and values", async () => {
+    const { fetch, calls } = stubFetch(bulkEcho);
+
+    await new VikunjaClient(config, { fetch }).bulkUpdateTasks([7, 9], ["done"], { done: true });
+
+    assert.equal(calls.length, 1, "one request for the set — never one per task");
+    const [call] = calls;
+    assert.ok(call);
+    assert.equal(call.method, "POST");
+    assert.equal(new URL(call.url).pathname, "/api/v1/tasks/bulk");
+    assert.deepEqual(call.body, { task_ids: [7, 9], fields: ["done"], values: { done: true } });
+  });
+
+  it("R1: sends the field list verbatim and in order, neither widened nor inferred", async () => {
+    // A field named but absent from `values` writes its zero value, which is exactly how a
+    // cleared priority and a cleared due date are spelled — and exactly why the list may not
+    // carry anything the caller did not ask for.
+    const { fetch, calls } = stubFetch(bulkEcho);
+
+    await new VikunjaClient(config, { fetch }).bulkUpdateTasks([7], ["priority", "due_date"], {
+      priority: 0,
+      due_date: "0001-01-01T00:00:00Z",
+    });
+
+    const [call] = calls;
+    assert.ok(call);
+    assert.deepEqual(call.body, {
+      task_ids: [7],
+      fields: ["priority", "due_date"],
+      values: { priority: 0, due_date: "0001-01-01T00:00:00Z" },
+    });
+  });
+
+  it("R1/R5: refuses an empty fields list before a request is built", async () => {
+    // An empty list does not mean "change nothing". `updateSingleTask` restores the unlisted
+    // columns only `if len(fields) > 0`; with none, `colsToUpdate` stays the full 14 and the
+    // "Mergo does ignore nil values" block re-zeroes everything the payload omits. Probed on
+    // 2.3.0: HTTP 200, and the task came back with an empty description, priority 0 and a
+    // zeroed due date. So the refusal has to happen before the request exists.
+    const { fetch, calls } = stubFetch(bulkEcho);
+
+    await assert.rejects(
+      new VikunjaClient(config, { fetch }).bulkUpdateTasks([7], [], { done: true }),
+      /field/,
+    );
+    assert.equal(calls.length, 0, "nothing was sent, so nothing was stripped");
+  });
+
+  it("R5: surfaces a refused write as a VikunjaHttpError carrying status and code", async () => {
+    // `BulkTask.CanUpdate` checks `CanWrite` on every distinct project, so an archived one
+    // refuses the whole call with 412 / 3008 — and the transaction rolls back every task in it.
+    const { fetch } = stubFetch(
+      () =>
+        new Response(JSON.stringify({ code: 3008, message: "This project is archived" }), {
+          status: 412,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await assert.rejects(
+      new VikunjaClient(config, { fetch }).bulkUpdateTasks([7, 9], ["done"], { done: true }),
+      (error: unknown) => {
+        assert.ok(error instanceof VikunjaHttpError);
+        assert.equal(error.status, 412);
+        assert.equal(error.code, 3008);
+        assert.match(error.message, /archived/);
+        return true;
+      },
+    );
+  });
+});
+
 describe("client transport: read-modify-write", () => {
   it("R7: updateTask preserves the fields the patch omits", async () => {
     const current: RawTask = {

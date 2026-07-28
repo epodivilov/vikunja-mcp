@@ -5,6 +5,7 @@ import { VikunjaClient, resolvePageSize } from "./client.js";
 import { loadConfig } from "./config.js";
 import { Resolver } from "./resolver.js";
 import { registerAssignTaskTool } from "./tools/assign-task.js";
+import { registerBulkUpdateTasksTool } from "./tools/bulk-update-tasks.js";
 import { registerCommentTaskTool } from "./tools/comment-task.js";
 import { registerCompleteTaskTool } from "./tools/complete-task.js";
 import { registerCreateTaskTool } from "./tools/create-task.js";
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
   // client has to be able to allow creating a task without also allowing deleting one.
   registerCreateTaskTool(server, client, resolver);
   registerUpdateTaskTool(server, client, resolver);
+  registerBulkUpdateTasksTool(server, client, resolver);
   registerCompleteTaskTool(server, client, resolver);
   registerCommentTaskTool(server, client, resolver);
   registerUpdateCommentTool(server, client, resolver);

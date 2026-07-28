@@ -61,6 +61,8 @@ Write (keep gated):
 
 - `vikunja_create_task` — optionally assigned to people as it is created
 - `vikunja_update_task`
+- `vikunja_bulk_update_tasks` — set the same `done` / `priority` / `due` across many tasks in one
+  transactional write; refuses tasks carrying assignees, reminders or your favourite flag
 - `vikunja_complete_task`
 - `vikunja_comment_task` — add a comment, body in markdown
 - `vikunja_update_comment` — replace an existing comment's body; Vikunja permits this only to the

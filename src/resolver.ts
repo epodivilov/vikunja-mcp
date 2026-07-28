@@ -299,38 +299,115 @@ export class Resolver {
    *
    * One request: v2.3.0 accepts `index` in a filter expression, so the key resolves without
    * walking the project's task list. (v2.4.0 adds `GET /projects/{id}/tasks/by-index/{index}`,
-   * which would replace the filter with a path — this method is the only place that would change.)
+   * which would replace the filter with a path — `resolveTasks` is the only place that would
+   * change.)
    *
    * The task is returned rather than only its id because that request already paid for it, and
    * the caller that wants to read it would otherwise fetch the same row again. Callers needing
    * just the id take `.id`.
+   *
+   * The single-ref case of `resolveTasks`, not a copy of it: the matching rule below — match on
+   * `index`, never take row 0 — is the one thing in this module a wrong answer is worse than an
+   * error, and two implementations of it would be two chances to get it wrong.
    */
   async resolveTask(ref: string): Promise<RawTask> {
-    const { prefix, index } = parseTaskRef(ref);
-    const project = await this.#project(prefix, "task");
-    const projectId = project.id;
-    const tasks = await this.#client.listTasks({
-      filter: `project_id = ${projectId} && index = ${index}`,
-    });
+    const [task] = await this.resolveTasks([ref]);
 
-    // Matched rather than taken from tasks[0]: a server that does not honour the `index` term
-    // answers with the whole project, and the first row of that is a different task entirely.
-    // Returning the wrong task silently is the failure this module exists to prevent.
-    const match = tasks.find((task) => task.index === index && task.project_id === projectId);
-
-    if (match === undefined) {
-      // An archived project answers `GET /tasks` with nothing at all — the collection is built
-      // from the user's non-archived projects and takes no parameter to widen that (probed on
-      // 2.3.0, where `GET /tasks/{id}` still returns the very task the filter omits). Saying the
-      // index does not exist would be a lie; the key is simply not resolvable on this path.
-      throw new Error(
-        project.archived
-          ? `Cannot resolve ${prefix}-${index}: project ${prefix} (id ${projectId}) is archived, and Vikunja does not list tasks of archived projects. Read the task as { id: <global id> }, or unarchive the project.`
-          : `No task ${prefix}-${index}: project ${prefix} (id ${projectId}) has no task with index ${index}.`,
-      );
+    // `resolveTasks` answers one task per ref or throws naming the ref that failed, so this
+    // branch is unreachable; the check is what lets the return type say so without a cast.
+    if (task === undefined) {
+      throw new Error(`No task ${ref}: the key resolved to nothing.`);
     }
 
-    return match;
+    return task;
+  }
+
+  /**
+   * Many keys -> the tasks they name, one per key, in the order they were named.
+   *
+   * One request per project, not per key: v2.3.0's filter parser accepts `index in 24, 25, 26`
+   * (it rewrites `in` to `?=`, and its auto-quoting keeps the comma-separated list as one value,
+   * which `getNativeValueForTaskField` then splits) — probed live, with and without spaces. A key
+   * set spanning P projects therefore costs P requests. A project wanted at a single index keeps
+   * the `index = n` spelling: it is the form verified against the live server first, and the
+   * batched one buys nothing for one value.
+   *
+   * Every prefix is resolved to a project before the first read, so an unknown or ambiguous
+   * project fails with nothing fetched. Every row is then matched on its own `index` *and*
+   * `project_id` rather than zipped against the request by position — a server that ignored the
+   * `index` term would answer with the project's whole task list, and position would hand back a
+   * different task for every key. That failure is silent, which is why the batching does not get
+   * to make it cheaper.
+   *
+   * A ref that matches nothing fails the whole call, naming that ref: resolution precedes every
+   * write its callers make, so a bad name must leave the set untouched rather than half applied.
+   * The same key twice answers twice — deduplication belongs to the caller that knows whether two
+   * mentions of one task mean one operation or two.
+   */
+  async resolveTasks(refs: readonly string[]): Promise<RawTask[]> {
+    if (refs.length === 0) {
+      return [];
+    }
+
+    // Prefixes first, each looked up once, and all of them before anything is read.
+    const projects = new Map<string, ProjectEntry>();
+    const targets: { prefix: string; index: number; project: ProjectEntry }[] = [];
+
+    for (const ref of refs) {
+      const { prefix, index } = parseTaskRef(ref);
+      let project = projects.get(prefix);
+
+      if (project === undefined) {
+        project = await this.#project(prefix, "task");
+        projects.set(prefix, project);
+      }
+
+      targets.push({ prefix, index, project });
+    }
+
+    // Indexes grouped by project, in first-mention order and without repeats: one request per
+    // project, each carrying only that project's own indexes.
+    const groups = new Map<number, number[]>();
+
+    for (const { index, project } of targets) {
+      const indexes = groups.get(project.id);
+
+      if (indexes === undefined) {
+        groups.set(project.id, [index]);
+      } else if (!indexes.includes(index)) {
+        indexes.push(index);
+      }
+    }
+
+    const found = new Map<string, RawTask>();
+
+    for (const [projectId, indexes] of groups) {
+      const tasks = await this.#client.listTasks({ filter: taskIndexFilter(projectId, indexes) });
+
+      for (const task of tasks) {
+        if (task.project_id === projectId && indexes.includes(task.index)) {
+          found.set(taskSlot(projectId, task.index), task);
+        }
+      }
+    }
+
+    return targets.map(({ prefix, index, project }) => {
+      const match = found.get(taskSlot(project.id, index));
+
+      if (match === undefined) {
+        // An archived project answers `GET /tasks` with nothing at all — the collection is built
+        // from the user's non-archived projects and takes no parameter to widen that (probed on
+        // 2.3.0, where `GET /tasks/{id}` still returns the very task the filter omits). Saying the
+        // index does not exist would be a lie; the key is simply not resolvable on this path.
+        throw new Error(
+          project.archived
+            ? `Cannot resolve ${prefix}-${index}: project ${prefix} (id ${project.id}) is archived, and Vikunja does not list tasks of archived projects. Read the task as { id: <global id> }, or unarchive the project.`
+            : `No task ${prefix}-${index}: project ${prefix} (id ${project.id}) has no task with index ${index}.`,
+        );
+      }
+
+      return match;
+    });
   }
 
   /**
@@ -740,6 +817,27 @@ export class Resolver {
 
     return { byKey, byId };
   }
+}
+
+/**
+ * The filter naming exactly the wanted tasks of one project.
+ *
+ * One index reads `index = n`, several read `index in a, b, c`. The list form is legal on 2.3.0
+ * — whitespace included — because the parser's auto-quoting captures everything up to `&`, `|`
+ * or a paren, so the commas survive inside one quoted value. `join()` rather than an indexed read
+ * for the single case: the same string, and no index access the type system has to be talked out
+ * of.
+ */
+function taskIndexFilter(projectId: number, indexes: readonly number[]): string {
+  const term =
+    indexes.length === 1 ? `index = ${indexes.join()}` : `index in ${indexes.join(", ")}`;
+
+  return `project_id = ${projectId} && ${term}`;
+}
+
+/** How a task is keyed while a batch is matched up: its project and its index, never row order. */
+function taskSlot(projectId: number, index: number): string {
+  return `${projectId}:${index}`;
 }
 
 /**
