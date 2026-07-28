@@ -304,24 +304,29 @@ function describeBulkBlockers(blockers: readonly BulkBlocker[]): string {
     .map((blocker) => `${blocker.ref} (${blocker.reasons.join("; ")})`)
     .join(", ");
 
+  const destroys = blockers.some((blocker) => blocker.destroys);
+  const repeats = blockers.some((blocker) => blocker.repeats);
+
   const why: string[] = [];
   const remedies: string[] = [];
 
-  if (blockers.some((blocker) => blocker.destroys)) {
+  if (destroys) {
     why.push(
       "it deletes a task's assignees and reminders and drops it out of your favourites no matter which fields it is told to write",
     );
-    remedies.push("vikunja_update_task, which preserves all three");
+    remedies.push(repeats ? "vikunja_update_task for the first three" : "vikunja_update_task");
   }
 
-  if (blockers.some((blocker) => blocker.repeats)) {
+  if (repeats) {
     why.push(
-      "and it does not make a completion stick on a repeating task — the task stays open with its dates unrolled, left carrying a done_at stamp",
+      "it does not make a completion stick on a repeating task, which stays open with its dates unrolled and a done_at stamp on it",
     );
-    remedies.push("vikunja_complete_task for the repeating ones");
+    remedies.push(
+      destroys ? "vikunja_complete_task for the repeating ones" : "vikunja_complete_task",
+    );
   }
 
-  return `Nothing was written. Vikunja's bulk endpoint mishandles these tasks: ${why.join(" ")}. The tasks are: ${named}. Change them one at a time with ${remedies.join(", or ")}, or leave them out of this call.`;
+  return `Nothing was written. Vikunja's bulk endpoint mishandles these tasks: ${why.join(", and ")}. The tasks are: ${named}. Change them one at a time with ${remedies.join(", or ")}, or leave them out of this call.`;
 }
 
 /** The fields a bulk update may set — the three that mean something set identically on a set. */
