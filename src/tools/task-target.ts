@@ -183,6 +183,26 @@ export interface BulkBlocker {
   ref: string;
   /** What blocks it, one phrase per field. Never empty. */
   reasons: string[];
+  /** Whether the endpoint would destroy something on it: assignees, reminders, the favourite. */
+  destroys: boolean;
+  /** Whether it repeats, so the `done` in this patch would not stick. Only ever set with one. */
+  repeats: boolean;
+}
+
+/**
+ * Whether the server will treat a completion of this task as a repeat rather than as a close.
+ *
+ * `repeat_mode` decides which field carries the schedule: `1` is monthly and **ignores**
+ * `repeat_after`, so a monthly-repeating task is `{ repeat_mode: 1, repeat_after: 0 }` and a test
+ * of the interval alone would call it non-repeating. Modes `0` and `3` both use the interval.
+ *
+ * Fails closed, like every other branch of the check: a row carrying neither field did not come
+ * from a read, and "no repeat fields" must not be read as "does not repeat".
+ */
+function isRepeating(task: RawTask): boolean {
+  if (task.repeat_mode === undefined && task.repeat_after === undefined) return true;
+
+  return task.repeat_mode === 1 || (task.repeat_after ?? 0) > 0;
 }
 
 /**
@@ -197,14 +217,27 @@ export interface BulkBlocker {
  * `priority` alone, came back with none of the three. One `values` object serves the whole set,
  * so there is nothing to echo back per task — the only defence is not to write those tasks.
  *
- * It fails **closed**. All three fields are populated by `addMoreInfoToTasks`, which both read
- * paths go through, so a row that carries none of them did not come from a read — and treating
- * that as "clean" would fail open on exactly the path this guard exists to cover.
+ * A fourth class blocks only when the patch names `done`: a **repeating** task. Probed live on
+ * 2.3.0 — the endpoint computes the rolled-forward dates, returns them in the 200 body, and then
+ * persists only the columns named in `fields`, so the roll is discarded. The task is left open,
+ * its due date still in the past, carrying a `done_at` stamp: a completion that silently did not
+ * take, and an inconsistent row. `POST /tasks/{id}` rolls it correctly, which is why the refusal
+ * points at `vikunja_complete_task`.
+ *
+ * That one is conditional where the other three are not, and the asymmetry is the point: the
+ * first three are destroyed whichever field is written, so refusing them always is right, while
+ * a repeating task takes a `priority` or a `due` perfectly well. Refusing those too would be a
+ * false refusal — being stricter than the server for no gain, which this project does not do.
+ *
+ * It fails **closed**. All the fields it reads are sent by both read paths, so a row that carries
+ * none of them did not come from a read — and treating that as "clean" would fail open on exactly
+ * the path this guard exists to cover.
  *
  * Pure, and taking rows rather than a client: the check is worth proving on its own, and the
- * ordering it belongs to (resolve, vet, *then* write) is proved by `applyBulkUpdate`.
+ * ordering it belongs to (resolve, vet, *then* write) is proved by `applyBulkUpdate`. It takes the
+ * patch as well as the rows because one of the four classes depends on what is being written.
  */
-export function findBulkBlockers(tasks: readonly RawTask[]): BulkBlocker[] {
+export function findBulkBlockers(tasks: readonly RawTask[], fields: BulkTaskFields): BulkBlocker[] {
   const blockers: BulkBlocker[] = [];
 
   for (const task of tasks) {
@@ -237,25 +270,58 @@ export function findBulkBlockers(tasks: readonly RawTask[]): BulkBlocker[] {
       reasons.push("its favourite flag was not reported by the read this check ran on");
     }
 
+    // Everything above is destroyed whatever is written; what follows depends on the patch.
+    const destroys = reasons.length > 0;
+
+    // Only when a completion is actually being asked for. A repeating task takes a priority or a
+    // due date like any other, and refusing those would be a refusal the server would not make.
+    const repeats = fields.done !== undefined && isRepeating(task);
+
+    if (repeats) {
+      reasons.push("repeats, so a bulk completion would not stick");
+    }
+
     if (reasons.length > 0) {
       // The fallback is unreachable on a read: `setIdentifier` fills `identifier` in itself,
       // down to `#<index>` for a project with no prefix, so `identifier || fallback` never takes
       // it. It is kept for the one row that did NOT come from a read — precisely what the
       // fail-closed branches above report, and the only row with nothing else to call it by.
-      blockers.push({ ref: task.identifier || `task ${task.id}`, reasons });
+      blockers.push({ ref: task.identifier || `task ${task.id}`, reasons, destroys, repeats });
     }
   }
 
   return blockers;
 }
 
-/** The one refusal, naming every blocked task and pointing at the tool that can change them. */
+/**
+ * The one refusal, naming every blocked task and pointing at the tool that can change it.
+ *
+ * Only the failure modes actually present are explained: a caller whose set has no repeating task
+ * should not have to read about repetition to find the sentence that applies to them.
+ */
 function describeBulkBlockers(blockers: readonly BulkBlocker[]): string {
   const named = blockers
     .map((blocker) => `${blocker.ref} (${blocker.reasons.join("; ")})`)
     .join(", ");
 
-  return `Nothing was written. Vikunja's bulk endpoint deletes a task's assignees and reminders and drops it out of your favourites no matter which fields it is told to write, and these tasks carry one of those: ${named}. Update them one at a time with vikunja_update_task, which preserves all three, or leave them out of this call.`;
+  const why: string[] = [];
+  const remedies: string[] = [];
+
+  if (blockers.some((blocker) => blocker.destroys)) {
+    why.push(
+      "it deletes a task's assignees and reminders and drops it out of your favourites no matter which fields it is told to write",
+    );
+    remedies.push("vikunja_update_task, which preserves all three");
+  }
+
+  if (blockers.some((blocker) => blocker.repeats)) {
+    why.push(
+      "and it does not make a completion stick on a repeating task — the task stays open with its dates unrolled, left carrying a done_at stamp",
+    );
+    remedies.push("vikunja_complete_task for the repeating ones");
+  }
+
+  return `Nothing was written. Vikunja's bulk endpoint mishandles these tasks: ${why.join(" ")}. The tasks are: ${named}. Change them one at a time with ${remedies.join(", or ")}, or leave them out of this call.`;
 }
 
 /** The fields a bulk update may set — the three that mean something set identically on a set. */
@@ -273,8 +339,13 @@ export interface BulkTaskFields {
  * can load this module (zod is its only runtime import) and cannot load a tool. Resolution before
  * the write is what makes a bad name change nothing; the blocker check before the write is what
  * keeps a task's assignees and reminders; the read-back afterwards is what makes the answer the
- * server's own state rather than an echo of the request — a repeating task asked to be done comes
- * back open, and the answer says so.
+ * server's own state rather than an echo of the request.
+ *
+ * That last one earns more than it looks. Probed on 2.3.0 with a repeating task: the 200 body
+ * carried a rolled-forward `due_date` that the server then did not persist, so echoing it would
+ * have reported a date that is not in the database. Reading back reports what is stored. The
+ * blocker check now refuses that case outright, so it is no longer reachable here — but the
+ * reason for reading back rather than echoing stands on its own.
  *
  * `fields` is turned into the endpoint's `fields` list by taking the *patch's own keys*, so a
  * cleared priority (`0`) and a cleared due date (`""`) are written rather than restored from the
@@ -303,7 +374,7 @@ export async function applyBulkUpdate(
   }
 
   const tasks = await resolveBulkTargets(client, resolver, target);
-  const blockers = findBulkBlockers(tasks);
+  const blockers = findBulkBlockers(tasks, fields);
 
   if (blockers.length > 0) {
     throw new Error(describeBulkBlockers(blockers));

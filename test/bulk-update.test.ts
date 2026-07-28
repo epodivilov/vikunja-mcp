@@ -63,6 +63,11 @@ function task(id: number, projectId: number, index: number, overrides: Partial<R
     assignees: null,
     reminders: null,
     is_favorite: false,
+    // Both read paths always send these, as zero values on a task that does not repeat — probed
+    // live on 2.3.0. The check fails closed on their absence, so a fixture that omitted them
+    // would block every task and prove nothing.
+    repeat_after: 0,
+    repeat_mode: 0,
     ...overrides,
   };
   return row;
@@ -96,8 +101,10 @@ interface Stack {
 /** One routing fetch answering every endpoint the bulk flow touches, recording each request. */
 function stack(options: StackOptions = {}): Stack {
   const calls: RecordedCall[] = [];
-  const store: RawTask[] = TASKS.map((row) => ({ ...row }));
   const repeating = options.repeating ?? [];
+  const store: RawTask[] = TASKS.map((row) =>
+    repeating.includes(row.id) ? { ...row, repeat_after: 86400 } : { ...row },
+  );
 
   const fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
@@ -176,10 +183,13 @@ function stack(options: StackOptions = {}): Stack {
           (row as unknown as Record<string, unknown>)[field] = payload.values[field];
         }
 
-        // A repeating task never ends up done: the server rolls it forward and reopens it.
+        // A repeating task does not end up done — and, on this endpoint, does not end up rolled
+        // forward either. Probed on 2.3.0: the 200 body carries the new dates, but only the
+        // columns named in `fields` are persisted, so the roll is discarded and the task is left
+        // open with its old due date. That is what this stub reproduces; simulating the roll
+        // would be a stub asserting something the server does not do.
         if (repeating.includes(id) && payload.fields.includes("done")) {
           row.done = false;
-          row.due_date = "2026-08-01T09:00:00Z";
         }
       }
 
@@ -328,17 +338,20 @@ describe("batch key resolution", () => {
 
 describe("bulk blocker check", () => {
   it("R4: reports assignees, reminders and a favourite, each with its own reason", async () => {
-    const blockers = findBulkBlockers([
-      task(617, 11, 24, { assignees: [{ id: 3, username: "alice", name: "" }] }),
-      task(618, 11, 25, { reminders: [{ reminder: "2026-08-01T09:00:00Z" }] }),
-      task(619, 11, 26, { is_favorite: true }),
-      task(600, 11, 1, {
-        assignees: [{ id: 3, username: "alice", name: "" }],
-        reminders: [{ reminder: "2026-08-01T09:00:00Z" }],
-        is_favorite: true,
-      }),
-      task(601, 11, 2),
-    ]);
+    const blockers = findBulkBlockers(
+      [
+        task(617, 11, 24, { assignees: [{ id: 3, username: "alice", name: "" }] }),
+        task(618, 11, 25, { reminders: [{ reminder: "2026-08-01T09:00:00Z" }] }),
+        task(619, 11, 26, { is_favorite: true }),
+        task(600, 11, 1, {
+          assignees: [{ id: 3, username: "alice", name: "" }],
+          reminders: [{ reminder: "2026-08-01T09:00:00Z" }],
+          is_favorite: true,
+        }),
+        task(601, 11, 2),
+      ],
+      {},
+    );
 
     assert.deepEqual(
       blockers.map((blocker) => blocker.ref),
@@ -353,10 +366,13 @@ describe("bulk blocker check", () => {
 
   it("R4: reports nothing for the empty shapes Vikunja actually sends", async () => {
     assert.deepEqual(
-      findBulkBlockers([
-        task(617, 11, 24, { assignees: null, reminders: null, is_favorite: false }),
-        task(618, 11, 25, { assignees: [], reminders: [], is_favorite: false }),
-      ]),
+      findBulkBlockers(
+        [
+          task(617, 11, 24, { assignees: null, reminders: null, is_favorite: false }),
+          task(618, 11, 25, { assignees: [], reminders: [], is_favorite: false }),
+        ],
+        {},
+      ),
       [],
     );
   });
@@ -378,7 +394,7 @@ describe("bulk blocker check", () => {
       labels: null,
     } as unknown as RawTask;
 
-    const blockers = findBulkBlockers([bare]);
+    const blockers = findBulkBlockers([bare], {});
 
     assert.equal(blockers.length, 1);
     assert.equal(blockers[0]?.ref, "VMCP-24");
@@ -387,6 +403,67 @@ describe("bulk blocker check", () => {
       3,
       "all three fields are unknown, so all three block",
     );
+  });
+
+  it("R4: blocks a repeating task when the patch sets done", () => {
+    // The interval spelling, repeat_mode 0.
+    const blockers = findBulkBlockers([task(617, 11, 24, { repeat_after: 86400 })], {
+      done: true,
+    });
+
+    assert.equal(blockers.length, 1);
+    assert.equal(blockers[0]?.repeats, true);
+    assert.equal(blockers[0]?.destroys, false, "nothing would be destroyed on it");
+    assert.match(blockers[0]?.reasons.join(" ") ?? "", /repeat/i);
+  });
+
+  it("R4: blocks a monthly-repeating task, whose repeat_after is 0", () => {
+    // The trap: repeat_mode 1 repeats monthly and IGNORES repeat_after, so a check on the
+    // interval alone would call this task non-repeating and let the silent no-op through.
+    const blockers = findBulkBlockers([task(617, 11, 24, { repeat_mode: 1, repeat_after: 0 })], {
+      done: true,
+    });
+
+    assert.equal(blockers.length, 1, "mode 1 repeats even with a zero interval");
+    assert.equal(blockers[0]?.repeats, true);
+  });
+
+  it("R4: blocks repeat mode 3, which repeats from today by the interval", () => {
+    assert.equal(
+      findBulkBlockers([task(617, 11, 24, { repeat_mode: 3, repeat_after: 3600 })], {
+        done: true,
+      }).length,
+      1,
+    );
+  });
+
+  it("R4: leaves a repeating task alone when the patch does not set done", () => {
+    // The asymmetry with the other three: they are destroyed whatever is written, this one is
+    // only mishandled on a completion. Refusing a priority change here would be a refusal the
+    // server would not make.
+    const repeating = [
+      task(617, 11, 24, { repeat_after: 86400 }),
+      task(618, 11, 25, { repeat_mode: 1, repeat_after: 0 }),
+    ];
+
+    assert.deepEqual(findBulkBlockers(repeating, { priority: 4 }), []);
+    assert.deepEqual(findBulkBlockers(repeating, { due: "2026-09-01T10:00:00Z" }), []);
+    assert.equal(
+      findBulkBlockers(repeating, { done: false }).length,
+      2,
+      "reopening is a done write too, and the endpoint mishandles it the same way",
+    );
+  });
+
+  it("R4: fails closed on a row carrying neither repeat field, when done is set", () => {
+    const { repeat_after, repeat_mode, ...row } = task(617, 11, 24);
+    void repeat_after;
+    void repeat_mode;
+
+    const blockers = findBulkBlockers([row as RawTask], { done: true });
+
+    assert.equal(blockers.length, 1, "unknown is not 'does not repeat'");
+    assert.equal(blockers[0]?.repeats, true);
   });
 });
 
@@ -475,20 +552,39 @@ describe("bulk update body", () => {
     assert.deepEqual(bulkWrite(harness.calls).task_ids, [619, 617]);
   });
 
-  it("R6: reports a repeating task as the server left it, not as the call asked", async () => {
-    // Completing a repeating task does not leave it done: Vikunja rolls it forward to its next
-    // occurrence and hands it back open. The answer is read back, so it says so.
+  it("R4: refuses the whole call when a repeating task is asked to be done", async () => {
+    // A bulk completion does not stick on a repeating task — the endpoint discards the roll it
+    // computes and leaves the task open with a done_at stamp. Refused rather than half-applied.
     const harness = stack({ repeating: [618] });
 
-    const answer = await bulkUpdate(harness, { tasks: ["VMCP-24", "VMCP-25"] }, { done: true });
+    await assert.rejects(
+      () => bulkUpdate(harness, { tasks: ["VMCP-24", "VMCP-25"] }, { done: true }),
+      (error: Error) => {
+        assert.match(error.message, /VMCP-25/, "the repeating task is named");
+        assert.doesNotMatch(error.message, /VMCP-24/, "the ordinary one is not");
+        assert.match(error.message, /repeat/i);
+        assert.match(error.message, /vikunja_complete_task/, "and the remedy is named");
+        return true;
+      },
+    );
 
     assert.deepEqual(
-      answer.map((row) => ({ ref: row.ref, done: row.done })),
-      [
-        { ref: "VMCP-24", done: true },
-        { ref: "VMCP-25", done: false },
-      ],
+      taskCalls(harness.calls).filter((call) => call.startsWith("POST")),
+      [],
+      "nothing was written",
     );
-    assert.equal(answer[1]?.due, "2026-08-01T09:00:00Z", "rolled forward, and the answer shows it");
+  });
+
+  it("R1: still writes a repeating task when only its priority is set", async () => {
+    // The conditional half of the refusal, end to end: no `done`, so no refusal, and the write
+    // goes out. Without this the guard could be over-broad and every test would still pass.
+    const harness = stack({ repeating: [618] });
+
+    const answer = await bulkUpdate(harness, { tasks: ["VMCP-25"] }, { priority: 4 });
+
+    assert.deepEqual(
+      answer.map((row) => ({ ref: row.ref, priority: row.priority })),
+      [{ ref: "VMCP-25", priority: 4 }],
+    );
   });
 });

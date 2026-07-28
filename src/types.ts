@@ -266,6 +266,25 @@ export interface RawTask {
   /** Whether the *calling* user has favourited the task; per-user, unlike the two fields above. */
   is_favorite?: boolean;
   /**
+   * How the task repeats. Read by one caller: the bulk-update blocker check, and only when the
+   * patch names `done`.
+   *
+   * **Both fields are needed, and reading only `repeat_after` is the trap.** `repeat_mode` is
+   * `0` (repeat by the `repeat_after` interval), `1` (repeat monthly, *ignoring* `repeat_after`)
+   * or `3` (repeat from the current date rather than the last set one, still by `repeat_after`).
+   * So a monthly-repeating task is `repeat_mode: 1` with `repeat_after: 0`, and a check on the
+   * interval alone would let precisely that task through — which is what `isRepeating` exists to
+   * stop. Read out of the running server's own `docs.json` at 2.3.0, not guessed.
+   *
+   * Unlike `reminders` and `is_favorite` these are plain columns rather than fields
+   * `addMoreInfoToTasks` enriches, so both read paths always send them, as zero values when the
+   * task does not repeat — probed live on both paths. Optional and fail-closed anyway, for the
+   * same reason the two above are: a row that carries neither did not come from a read.
+   */
+  repeat_after?: number;
+  /** See `repeat_after`: `0` interval, `1` monthly (ignores the interval), `3` from today. */
+  repeat_mode?: number;
+  /**
    * Related tasks, keyed by relation kind. Both read paths embed them: `GET /tasks/{id}`, and
    * the `GET /tasks` collection a key resolves through (`addRelatedTasksToTasks`), which
    * initializes the map and so sends at least `{}`. Three shapes mean "none": absent (an

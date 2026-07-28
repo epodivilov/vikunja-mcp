@@ -41,9 +41,12 @@ export function registerBulkUpdateTasksTool(
         "whole set or none of it. Fields not passed keep their current values, as do titles, " +
         "descriptions and labels. Tasks that carry assignees or reminders, or that you have " +
         "favourited, are refused by name: Vikunja's bulk endpoint destroys all three whatever it " +
-        "is told to write, so change those with vikunja_update_task instead. Answers with the " +
-        "tasks as the server holds them afterwards — a repeating task asked to be done comes back " +
-        "open, rolled forward.",
+        "is told to write, so change those with vikunja_update_task instead. When done is being " +
+        "set, repeating tasks are refused by name too — the bulk endpoint does not make a " +
+        "completion stick on one, leaving it open with its dates unrolled and a done_at stamp on " +
+        "it; complete those with vikunja_complete_task. Setting only priority or due on a " +
+        "repeating task is fine. Answers with the tasks as the server holds them afterwards, read " +
+        "back rather than echoed.",
       // Strict, like every other write schema here: a field this tool does not implement is
       // refused rather than dropped. On a call that writes a whole set, a silently ignored
       // argument would be a set changed in a way nobody described.
@@ -59,9 +62,12 @@ export function registerBulkUpdateTasksTool(
             'Due date as an RFC3339 timestamp, "2026-07-25T09:00:00Z". An empty string clears it.',
           ),
       }),
-      // Not idempotent, for the reason vikunja_complete_task is not: a repeating task advances
-      // on every `done` it is handed, so a client that retried this one "for free" would walk a
-      // whole set of dates forward. `destructiveHint` is left at its default rather than claimed
+      // Not idempotent, though not for the reason vikunja_complete_task is not: a repeating task
+      // does NOT advance under this endpoint — probed on 2.3.0, the roll-forward it computes is
+      // discarded — which is why those are refused outright rather than retried. What keeps the
+      // hint false is that the set is re-resolved on every call, so a retry can legitimately land
+      // differently: a target that has since gained an assignee, a reminder or a favourite now
+      // refuses the whole call. `destructiveHint` is left at its default rather than claimed
       // false — this overwrites the named fields on every task in the set, with no history to
       // recover the old values from.
       annotations: { idempotentHint: false },
