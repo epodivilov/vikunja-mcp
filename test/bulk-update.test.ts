@@ -428,19 +428,22 @@ describe("bulk blocker check", () => {
     assert.equal(blockers[0]?.repeats, true);
   });
 
-  it("R4: blocks repeat mode 3, which repeats from today by the interval", () => {
+  it("R4: blocks repeat mode 2 — from today, by the interval", () => {
+    // Mode 2 is `TaskRepeatModeFromCurrentDate` in the server's own enum. It still carries its
+    // schedule in `repeat_after`, so this case is caught by the interval rather than by the mode;
+    // the mode is here to pin that a non-default one is not treated as "not repeating".
     assert.equal(
-      findBulkBlockers([task(617, 11, 24, { repeat_mode: 3, repeat_after: 3600 })], {
+      findBulkBlockers([task(617, 11, 24, { repeat_mode: 2, repeat_after: 3600 })], {
         done: true,
       }).length,
       1,
     );
   });
 
-  it("R4: leaves a repeating task alone when the patch does not set done", () => {
+  it("R4: leaves a repeating task alone unless the patch actually completes it", () => {
     // The asymmetry with the other three: they are destroyed whatever is written, this one is
-    // only mishandled on a completion. Refusing a priority change here would be a refusal the
-    // server would not make.
+    // mishandled only on the not-done -> done transition, which is the only thing that makes the
+    // server take its repeat branch. Refusing anything wider would be stricter than the server.
     const repeating = [
       task(617, 11, 24, { repeat_after: 86400 }),
       task(618, 11, 25, { repeat_mode: 1, repeat_after: 0 }),
@@ -448,10 +451,19 @@ describe("bulk blocker check", () => {
 
     assert.deepEqual(findBulkBlockers(repeating, { priority: 4 }), []);
     assert.deepEqual(findBulkBlockers(repeating, { due: "2026-09-01T10:00:00Z" }), []);
-    assert.equal(
-      findBulkBlockers(repeating, { done: false }).length,
-      2,
-      "reopening is a done write too, and the endpoint mishandles it the same way",
+    assert.deepEqual(
+      findBulkBlockers(repeating, { done: false }),
+      [],
+      "a re-open is not a completion: probed on 2.3.0, a bulk done:false on a repeating task moved nothing",
+    );
+  });
+
+  it("R4: leaves a repeating task alone when it is already done", () => {
+    // No transition, so no repeat branch on the server — and refusing here would send the caller
+    // to vikunja_complete_task to redo something already done.
+    assert.deepEqual(
+      findBulkBlockers([task(617, 11, 24, { repeat_after: 86400, done: true })], { done: true }),
+      [],
     );
   });
 

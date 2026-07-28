@@ -194,7 +194,9 @@ export interface BulkBlocker {
  *
  * `repeat_mode` decides which field carries the schedule: `1` is monthly and **ignores**
  * `repeat_after`, so a monthly-repeating task is `{ repeat_mode: 1, repeat_after: 0 }` and a test
- * of the interval alone would call it non-repeating. Modes `0` and `3` both use the interval.
+ * of the interval alone would call it non-repeating. Modes `0` and `2` both use the interval.
+ * The mode numbers come from `models.TaskRepeatMode` in `docs.json`, not from the prose
+ * `description` beside it, which says "3 = repeats from the current date" and is a typo.
  *
  * Fails closed, like every other branch of the check: a row carrying neither field did not come
  * from a read, and "no repeat fields" must not be read as "does not repeat".
@@ -217,7 +219,8 @@ function isRepeating(task: RawTask): boolean {
  * `priority` alone, came back with none of the three. One `values` object serves the whole set,
  * so there is nothing to echo back per task — the only defence is not to write those tasks.
  *
- * A fourth class blocks only when the patch names `done`: a **repeating** task. Probed live on
+ * A fourth class blocks only when the patch completes a task that is not already done: a
+ * **repeating** task. Probed live on
  * 2.3.0 — the endpoint computes the rolled-forward dates, returns them in the 200 body, and then
  * persists only the columns named in `fields`, so the roll is discarded. The task is left open,
  * its due date still in the past, carrying a `done_at` stamp: a completion that silently did not
@@ -226,8 +229,9 @@ function isRepeating(task: RawTask): boolean {
  *
  * That one is conditional where the other three are not, and the asymmetry is the point: the
  * first three are destroyed whichever field is written, so refusing them always is right, while
- * a repeating task takes a `priority` or a `due` perfectly well. Refusing those too would be a
- * false refusal — being stricter than the server for no gain, which this project does not do.
+ * a repeating task takes a `priority`, a `due`, a re-open, or a `done` it already carries,
+ * perfectly well. Refusing those too would be a false refusal — being stricter than the server
+ * for no gain, which this project does not do.
  *
  * It fails **closed**. All the fields it reads are sent by both read paths, so a row that carries
  * none of them did not come from a read — and treating that as "clean" would fail open on exactly
@@ -273,9 +277,14 @@ export function findBulkBlockers(tasks: readonly RawTask[], fields: BulkTaskFiel
     // Everything above is destroyed whatever is written; what follows depends on the patch.
     const destroys = reasons.length > 0;
 
-    // Only when a completion is actually being asked for. A repeating task takes a priority or a
-    // due date like any other, and refusing those would be a refusal the server would not make.
-    const repeats = fields.done !== undefined && isRepeating(task);
+    // Only on the transition the server actually treats as a repeat: not-done -> done. Anything
+    // wider is a refusal the server would not make. `updateDone` enters the repeat branch on
+    // `!oldTask.Done && newTask.Done` alone, so a *re-open* of a repeating task is handled
+    // honestly — probed on 2.3.0: a bulk `done: false` on an open repeating task changed nothing,
+    // stamped no `done_at` and moved no date. Re-asserting `done: true` on one already done is no
+    // transition either. Refusing those would also point the caller at `vikunja_complete_task`,
+    // which only ever writes `done: true` — advice that writes the opposite of what was asked.
+    const repeats = fields.done === true && !task.done && isRepeating(task);
 
     if (repeats) {
       reasons.push("repeats, so a bulk completion would not stick");

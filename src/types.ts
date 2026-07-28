@@ -267,14 +267,19 @@ export interface RawTask {
   is_favorite?: boolean;
   /**
    * How the task repeats. Read by one caller: the bulk-update blocker check, and only when the
-   * patch names `done`.
+   * patch would complete a task that is not already done.
    *
    * **Both fields are needed, and reading only `repeat_after` is the trap.** `repeat_mode` is
    * `0` (repeat by the `repeat_after` interval), `1` (repeat monthly, *ignoring* `repeat_after`)
-   * or `3` (repeat from the current date rather than the last set one, still by `repeat_after`).
+   * or `2` (repeat from the current date rather than the last set one, still by `repeat_after`).
    * So a monthly-repeating task is `repeat_mode: 1` with `repeat_after: 0`, and a check on the
    * interval alone would let precisely that task through — which is what `isRepeating` exists to
-   * stop. Read out of the running server's own `docs.json` at 2.3.0, not guessed.
+   * stop.
+   *
+   * Take the values from `models.TaskRepeatMode` in the server's `docs.json`
+   * (`enum: [0, 1, 2]`, `x-enum-varnames: [Default, Month, FromCurrentDate]`) and **not** from the
+   * prose `description` of `repeat_mode` in the same file, which says "3 = repeats from the
+   * current date". That is Vikunja's own typo and it contradicts the enum three lines away.
    *
    * Unlike `reminders` and `is_favorite` these are plain columns rather than fields
    * `addMoreInfoToTasks` enriches, so both read paths always send them, as zero values when the
@@ -282,7 +287,7 @@ export interface RawTask {
    * same reason the two above are: a row that carries neither did not come from a read.
    */
   repeat_after?: number;
-  /** See `repeat_after`: `0` interval, `1` monthly (ignores the interval), `3` from today. */
+  /** See `repeat_after`: `0` interval, `1` monthly (ignores the interval), `2` from today. */
   repeat_mode?: number;
   /**
    * Related tasks, keyed by relation kind. Both read paths embed them: `GET /tasks/{id}`, and

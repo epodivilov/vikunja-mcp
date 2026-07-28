@@ -41,12 +41,13 @@ export function registerBulkUpdateTasksTool(
         "whole set or none of it. Fields not passed keep their current values, as do titles, " +
         "descriptions and labels. Tasks that carry assignees or reminders, or that you have " +
         "favourited, are refused by name: Vikunja's bulk endpoint destroys all three whatever it " +
-        "is told to write, so change those with vikunja_update_task instead. When done is being " +
-        "set, repeating tasks are refused by name too — the bulk endpoint does not make a " +
+        "is told to write, so change those with vikunja_update_task instead. A repeating task is " +
+        "refused by name when this call would complete it — the bulk endpoint does not make a " +
         "completion stick on one, leaving it open with its dates unrolled and a done_at stamp on " +
-        "it; complete those with vikunja_complete_task. Setting only priority or due on a " +
-        "repeating task is fine. Answers with the tasks as the server holds them afterwards, read " +
-        "back rather than echoed.",
+        "it; complete those with vikunja_complete_task. Only that case is refused: setting " +
+        "priority or due on a repeating task, or reopening one, goes through like any other task. " +
+        "Answers with the tasks as the server holds them afterwards, read back rather than " +
+        "echoed.",
       // Strict, like every other write schema here: a field this tool does not implement is
       // refused rather than dropped. On a call that writes a whole set, a silently ignored
       // argument would be a set changed in a way nobody described.

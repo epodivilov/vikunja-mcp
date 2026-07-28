@@ -246,14 +246,22 @@ collapse the whole key-resolution dance below into one request.)
   `2026-07-20`, `done` stayed `false`, and `done_at` was stamped anyway. The task is left open,
   overdue and marked as completed at the same time. `POST /tasks/{id}` rolls it correctly, so this
   is the bulk path alone; a single-task control on an identical task moved due, start and end.
-  Hence the fourth, *conditional* refusal in `findBulkBlockers`: repeating tasks are refused only
-  when the patch names `done`, since a `priority` or a `due` lands on them like any other task.
+  Hence the fourth, *conditional* refusal in `findBulkBlockers` — and the condition is the
+  **transition**, not the field. `updateDone` enters its repeat branch on `!oldTask.Done &&
+  newTask.Done` alone, so only a `done: true` on a task that is not already done can be
+  mishandled. A bulk `done: false` on a repeating task is honest — probed on 2.3.0: nothing moved,
+  no `done_at` was stamped — and re-asserting a `done` it already carries is no transition either.
+  Refusing those would be stricter than the server, and would point the caller at
+  `vikunja_complete_task`, which only ever writes `done: true`.
   **Detecting one needs both fields.** `repeat_mode` is `0` (by the `repeat_after` interval), `1`
-  (monthly, *ignoring* `repeat_after`) or `3` (from today, by the interval) — read out of the
-  running server's `docs.json`. So a monthly-repeating task is `{ repeat_mode: 1, repeat_after: 0 }`
-  and a check on the interval alone calls it non-repeating. Both fields are plain columns rather
-  than anything `addMoreInfoToTasks` enriches, so both read paths always send them, as zero values
-  when the task does not repeat — probed on both paths.
+  (monthly, *ignoring* `repeat_after`) or `2` (from today, by the interval). Take those from
+  `models.TaskRepeatMode` in the server's `docs.json` — `enum: [0, 1, 2]`, `x-enum-varnames:
+  [Default, Month, FromCurrentDate]` — and **not** from the prose `description` of `repeat_mode`
+  in the same file, which says "3 = repeats from the current date": that is Vikunja's own typo,
+  contradicted by the enum three lines away. So a monthly-repeating task is
+  `{ repeat_mode: 1, repeat_after: 0 }` and a check on the interval alone calls it non-repeating.
+  Both fields are plain columns rather than anything `addMoreInfoToTasks` enriches, so both read
+  paths always send them, as zero values when the task does not repeat — probed on both paths.
 - **The 200 body is not the answer**, like every other write here: the handler renders the whole
   `BulkTask` struct back — `task_ids`, `fields`, `values` and a `tasks` array whose rows never went
   through `setIdentifier`. Probed: every row came back with `identifier: ""` and `labels: null`.
@@ -271,7 +279,8 @@ collapse the whole key-resolution dance below into one request.)
   escape hatch is not batched.** A key in one is already unresolvable (`GET /tasks` omits archived
   projects, and `resolveTasks` says so). An id read through `GET /tasks/{id}` resolves fine, and
   the write is then refused by the server: `BulkTask.CanUpdate` calls `Project.CanWrite`, which
-  returns `ErrProjectIsArchived` (412, code 3008) — read out of the source, not probed — and the
+  returns `ErrProjectIsArchived` (412, code 3008) — probed on 2.3.0 against a throwaway archived
+  project, and the refusal came through verbatim with no task in the call changed — and the
   transaction takes the whole call with it, which is the answer we want. Batch those ids through
   `filter=id in …` instead and it breaks silently: the collection answers `[]`, and a task that
   exists is reported missing. That is why `resolveBulkTargets` spends one request per id.
