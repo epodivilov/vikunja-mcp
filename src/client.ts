@@ -306,8 +306,9 @@ export class VikunjaClient {
    *
    * The one departure from `updateTask` is where the record comes from: the caller passes it,
    * because the resolver already listed every label to find this one. Reading it again would be a
-   * second request for a value in hand — and `GET /labels/{id}` is not even a reliable read, since
-   * a label the caller does not own answers 403 there while remaining perfectly updatable.
+   * second request for a value in hand — and `GET /labels/{id}` is not even a reliable check that
+   * the label is still there: a label id that no longer exists answers 403 ("You don't have the
+   * permission to see this"), with no Vikunja code, rather than a 404.
    */
   updateLabel(label: RawLabel, patch: LabelWrite): Promise<RawLabel> {
     return this.#requestObject<RawLabel>("POST", `/labels/${label.id}`, {
