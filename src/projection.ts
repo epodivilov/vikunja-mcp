@@ -28,7 +28,7 @@ import type {
   TaskFields,
   TaskRefLookup,
   TaskWrite,
-} from "./types.js";
+} from "./types.ts";
 
 /** Vikunja's zero value for an unset timestamp. */
 const ZERO_DATE = "0001-01-01T00:00:00Z";

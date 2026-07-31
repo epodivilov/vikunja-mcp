@@ -6,9 +6,9 @@
  * and what it says about itself.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { VikunjaClient } from "../client.js";
-import { toLeanProject } from "../projection.js";
-import { jsonResult } from "./result.js";
+import type { VikunjaClient } from "../client.ts";
+import { toLeanProject } from "../projection.ts";
+import { jsonResult } from "./result.ts";
 
 export function registerListProjectsTool(server: McpServer, client: VikunjaClient): void {
   server.registerTool(

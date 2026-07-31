@@ -15,10 +15,10 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import type { Resolver } from "../resolver.js";
-import { applyLabelDelete, labelTargetShape } from "./label-fields.js";
-import { jsonResult } from "./result.js";
+import type { VikunjaClient } from "../client.ts";
+import type { Resolver } from "../resolver.ts";
+import { applyLabelDelete, labelTargetShape } from "./label-fields.ts";
+import { jsonResult } from "./result.ts";
 
 export function registerDeleteLabelTool(
   server: McpServer,

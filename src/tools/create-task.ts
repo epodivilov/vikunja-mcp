@@ -3,12 +3,12 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import { toLeanTask, toTaskWrite } from "../projection.js";
-import type { Resolver } from "../resolver.js";
-import { jsonResult } from "./result.js";
-import { dueField, priorityField } from "./task-fields.js";
-import { usersField } from "./user-fields.js";
+import type { VikunjaClient } from "../client.ts";
+import { toLeanTask, toTaskWrite } from "../projection.ts";
+import type { Resolver } from "../resolver.ts";
+import { jsonResult } from "./result.ts";
+import { dueField, priorityField } from "./task-fields.ts";
+import { usersField } from "./user-fields.ts";
 
 export function registerCreateTaskTool(
   server: McpServer,

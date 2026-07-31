@@ -6,7 +6,7 @@
  * It stays low level on purpose — it speaks raw API shapes and raw filter strings.
  * Keys, lean DTOs and markdown belong to the layers above.
  */
-import type { Config } from "./config.js";
+import type { Config } from "./config.ts";
 import type {
   LabelWrite,
   RawBucket,
@@ -18,7 +18,7 @@ import type {
   RawView,
   RelationKind,
   TaskWrite,
-} from "./types.js";
+} from "./types.ts";
 
 /**
  * An upper bound we ask for, not the page size we get. The server clamps `per_page` to its

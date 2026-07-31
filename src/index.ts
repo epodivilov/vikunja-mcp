@@ -1,35 +1,10 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { VikunjaClient, resolvePageSize } from "./client.js";
-import { loadConfig } from "./config.js";
-import { Resolver } from "./resolver.js";
-import { registerAssignTaskTool } from "./tools/assign-task.js";
-import { registerBulkUpdateTasksTool } from "./tools/bulk-update-tasks.js";
-import { registerCommentTaskTool } from "./tools/comment-task.js";
-import { registerCompleteTaskTool } from "./tools/complete-task.js";
-import { registerCreateLabelTool } from "./tools/create-label.js";
-import { registerCreateTaskTool } from "./tools/create-task.js";
-import { registerDeleteCommentTool } from "./tools/delete-comment.js";
-import { registerDeleteLabelTool } from "./tools/delete-label.js";
-import { registerDeleteTaskTool } from "./tools/delete-task.js";
-import { registerGetBoardTool } from "./tools/get-board.js";
-import { registerGetCommentTool } from "./tools/get-comment.js";
-import { registerGetTaskTool } from "./tools/get-task.js";
-import { registerLabelTaskTool } from "./tools/label-task.js";
-import { registerListCommentsTool } from "./tools/list-comments.js";
-import { registerListLabelsTool } from "./tools/list-labels.js";
-import { registerListMembersTool } from "./tools/list-members.js";
-import { registerListProjectsTool } from "./tools/list-projects.js";
-import { registerListTasksTool } from "./tools/list-tasks.js";
-import { registerMoveTaskTool } from "./tools/move-task.js";
-import { registerRelateTasksTool } from "./tools/relate-tasks.js";
-import { registerSetTaskLabelsTool } from "./tools/set-task-labels.js";
-import { registerUnassignTaskTool } from "./tools/unassign-task.js";
-import { registerUnrelateTasksTool } from "./tools/unrelate-tasks.js";
-import { registerUpdateCommentTool } from "./tools/update-comment.js";
-import { registerUpdateLabelTool } from "./tools/update-label.js";
-import { registerUpdateTaskTool } from "./tools/update-task.js";
+import { VikunjaClient, resolvePageSize } from "./client.ts";
+import { loadConfig } from "./config.ts";
+import { registerAllTools } from "./register-tools.ts";
+import { Resolver } from "./resolver.ts";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -49,39 +24,9 @@ async function main(): Promise<void> {
 
   // A tool that throws is turned into an MCP tool error by the SDK's own dispatcher, which
   // reports `error.message` verbatim — so an actionable message is the whole of the contract
-  // a tool has to keep, and nothing here needs to wrap them.
-
-  // Read tools. Safe to allow-list: every one of these carries readOnlyHint.
-  registerListProjectsTool(server, client);
-  registerListTasksTool(server, client, resolver);
-  registerGetTaskTool(server, client, resolver);
-  registerListLabelsTool(server, client);
-  registerGetBoardTool(server, client, resolver);
-  registerListMembersTool(server, client, resolver);
-  registerListCommentsTool(server, client, resolver);
-  registerGetCommentTool(server, client, resolver);
-  //       See CLAUDE.md -> "Tool surface". Each tool lives in src/tools/*.
-
-  // Write tools. One per operation, and never behind a shared `subcommand` argument: an MCP
-  // client has to be able to allow creating a task without also allowing deleting one.
-  registerCreateTaskTool(server, client, resolver);
-  registerUpdateTaskTool(server, client, resolver);
-  registerBulkUpdateTasksTool(server, client, resolver);
-  registerCompleteTaskTool(server, client, resolver);
-  registerCommentTaskTool(server, client, resolver);
-  registerUpdateCommentTool(server, client, resolver);
-  registerMoveTaskTool(server, client, resolver);
-  registerLabelTaskTool(server, client, resolver);
-  registerSetTaskLabelsTool(server, client, resolver);
-  registerCreateLabelTool(server, client, resolver);
-  registerUpdateLabelTool(server, client, resolver);
-  registerAssignTaskTool(server, client, resolver);
-  registerUnassignTaskTool(server, client, resolver);
-  registerRelateTasksTool(server, client, resolver);
-  registerUnrelateTasksTool(server, client, resolver);
-  registerDeleteTaskTool(server, client, resolver);
-  registerDeleteCommentTool(server, client, resolver);
-  registerDeleteLabelTool(server, client, resolver);
+  // a tool has to keep, and nothing here needs to wrap them. The registration list itself lives
+  // in register-tools.ts, where a test can drive it against a stub server.
+  registerAllTools(server, client, resolver);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

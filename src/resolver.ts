@@ -7,7 +7,7 @@
  * it, so the tools do not have to. Nothing here performs I/O directly — it goes through the
  * injected client, which keeps the one-host rule enforced in a single place.
  */
-import type { TaskQuery } from "./client.js";
+import type { TaskQuery } from "./client.ts";
 import type {
   BoardMode,
   RawBucket,
@@ -17,7 +17,7 @@ import type {
   RawUser,
   RawView,
   TaskRefLookup,
-} from "./types.js";
+} from "./types.ts";
 
 /**
  * The slice of the client this module needs. Declared structurally rather than importing

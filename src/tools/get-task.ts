@@ -7,11 +7,11 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import { relatedProjectIds, toLeanTaskDetail } from "../projection.js";
-import type { Resolver } from "../resolver.js";
-import type { RawTask } from "../types.js";
-import { jsonResult } from "./result.js";
+import type { VikunjaClient } from "../client.ts";
+import { relatedProjectIds, toLeanTaskDetail } from "../projection.ts";
+import type { Resolver } from "../resolver.ts";
+import type { RawTask } from "../types.ts";
+import { jsonResult } from "./result.ts";
 
 export function registerGetTaskTool(
   server: McpServer,

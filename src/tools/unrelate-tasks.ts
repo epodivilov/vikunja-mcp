@@ -8,17 +8,17 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import { relatedProjectIds, toLeanTaskDetail } from "../projection.js";
-import type { Resolver } from "../resolver.js";
-import { RELATION_KINDS, parseRelationKind } from "../types.js";
-import { jsonResult } from "./result.js";
+import type { VikunjaClient } from "../client.ts";
+import { relatedProjectIds, toLeanTaskDetail } from "../projection.ts";
+import type { Resolver } from "../resolver.ts";
+import { RELATION_KINDS, parseRelationKind } from "../types.ts";
+import { jsonResult } from "./result.ts";
 import {
   OTHER_TASK_NAMES,
   otherTaskTargetShape,
   resolveTaskTarget,
   taskTargetShape,
-} from "./task-target.js";
+} from "./task-target.ts";
 
 export function registerUnrelateTasksTool(
   server: McpServer,
