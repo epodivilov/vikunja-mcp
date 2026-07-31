@@ -1,11 +1,11 @@
 /**
  * End-to-end coverage of the two kanban data paths, composed from the real `Resolver`,
  * `VikunjaClient` and projection — the exact layers `vikunja_get_board` and `vikunja_move_task`
- * wire together — over a single routing `fetch`. The tool files themselves are thin adapters and,
- * like every other tool in this repo, cannot be imported under `node --test` (they use `.js`
- * value specifiers the type-stripping loader will not resolve to `.ts`); what is proved here is
- * that the layers fit together: a project key -> its kanban view -> the board read -> lean board,
- * and a task ref -> its project's view -> the target column -> the move POST -> the read-back.
+ * wire together — over a single routing `fetch`. The tool files themselves are thin adapters,
+ * exercised directly for their registration and guards in `test/tools.test.ts`; what is proved
+ * here is that the layers fit together: a project key -> its kanban view -> the board read ->
+ * lean board, and a task ref -> its project's view -> the target column -> the move POST -> the
+ * read-back.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
