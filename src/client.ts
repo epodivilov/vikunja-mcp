@@ -144,10 +144,15 @@ export class VikunjaClient {
    * `HAVING MAX(all_projects.is_archived) = 0` and drops them — along with anything under an
    * archived parent, since a child inherits the flag. The resolver builds its key map from this
    * call, so omitting them would answer a perfectly good `OLD-4` with "no project has that key":
-   * false, and not fixable from the agent's side. Reads of an archived task are legitimate, and
-   * so are some writes: the server refuses an update to the project itself, but lets a kanban
-   * bucket-move through (probed on 2.3.0 — it moved a task and flipped its `done` on an archived
-   * board). The archive flag is not a write barrier, so nothing here treats it as one.
+   * false, and not fixable from the agent's side. Reads of an archived task are legitimate; task
+   * writes are not. A task-label bulk write, an assignee add, a comment update, a comment delete
+   * and a task bulk update each earn HTTP 412 / code 3008 (`ErrProjectIsArchived`) from the
+   * server. The one known task write that goes through is the kanban bucket move (probed on
+   * 2.3.0 — it moved a task and flipped its `done` on an archived board), and the reason is the
+   * project object the permission check hands to `Project.CanUpdate`, not the method it calls:
+   * `canDoBucket` passes a stub `&Project{ID: pv.ProjectID}` whose `IsArchived` is the zero value,
+   * so the un-archive exemption inside `CanUpdate` reads it as "the caller is un-archiving" and
+   * swallows the refusal — while the assignee path loads the real, archived row and keeps it.
    */
   listProjects(): Promise<RawProject[]> {
     return this.#requestAll<RawProject>("/projects", { is_archived: true });
