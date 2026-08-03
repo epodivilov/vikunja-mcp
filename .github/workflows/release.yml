@@ -46,9 +46,14 @@ jobs:
       # Pending changesets on main -> `changeset version` opens/updates the "Version Packages"
       # PR. None left (that PR merged) -> `changeset publish` runs `npm publish` (whose
       # prepublishOnly re-checks and builds) and, with createGithubReleases, cuts the Release.
+      #
+      # `changeset version` rewrites package.json with multi-line `keywords`/`files` arrays that
+      # biome's formatter collapses back to one line, so we reformat right after -- without it the
+      # generated "Version Packages" PR fails its own `npm run lint` (biome and changesets disagree
+      # on how to wrap those arrays), which is what blocked the first release.
       - uses: changesets/action@v1
         with:
-          version: npx changeset version
+          version: npx changeset version && npm run format
           publish: npx changeset publish
           createGithubReleases: true
         env:
