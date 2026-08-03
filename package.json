@@ -1,6 +1,6 @@
 {
   "name": "@epodivilov/vikunja-mcp",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Lean, identifier-native MCP server for Vikunja: compact task payloads and project keys like INFRA-41 instead of opaque global IDs.",
   "type": "module",
   "license": "MIT",
