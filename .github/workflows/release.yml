@@ -48,12 +48,14 @@ jobs:
       # prepublishOnly re-checks and builds) and, with createGithubReleases, cuts the Release.
       #
       # `changeset version` rewrites package.json with multi-line `keywords`/`files` arrays that
-      # biome's formatter collapses back to one line, so we reformat right after -- without it the
-      # generated "Version Packages" PR fails its own `npm run lint` (biome and changesets disagree
-      # on how to wrap those arrays), which is what blocked the first release.
+      # biome's formatter collapses back to one line, so the generated "Version Packages" PR would
+      # fail its own `npm run lint`. We reformat right after the bump -- but the two commands MUST
+      # be wrapped in the `changeset:version` npm script: changesets/action runs this `version:`
+      # input WITHOUT a shell, so a literal `&&` here is parsed as extra args to `changeset` and the
+      # bump silently no-ops (it did -- that is what left #17 empty on the first attempt).
       - uses: changesets/action@v1
         with:
-          version: npx changeset version && npm run format
+          version: npm run changeset:version
           publish: npx changeset publish
           createGithubReleases: true
         env:

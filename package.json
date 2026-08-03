@@ -34,6 +34,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
+    "changeset:version": "changeset version && npm run format",
     "test": "node --test test/*.test.ts",
     "check": "biome check . && npm run typecheck && npm test",
     "prepublishOnly": "npm run check && npm run build"
