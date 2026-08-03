@@ -5,9 +5,9 @@
  * is the mapping a caller needs before it can speak about one.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { VikunjaClient } from "../client.js";
-import { toLeanLabel } from "../projection.js";
-import { jsonResult } from "./result.js";
+import type { VikunjaClient } from "../client.ts";
+import { toLeanLabel } from "../projection.ts";
+import { jsonResult } from "./result.ts";
 
 export function registerListLabelsTool(server: McpServer, client: VikunjaClient): void {
   server.registerTool(

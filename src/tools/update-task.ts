@@ -8,12 +8,12 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import { toLeanTask, toTaskWrite } from "../projection.js";
-import type { Resolver } from "../resolver.js";
-import { jsonResult } from "./result.js";
-import { clearableDueField, priorityField } from "./task-fields.js";
-import { resolveTaskTarget, taskTargetShape } from "./task-target.js";
+import type { VikunjaClient } from "../client.ts";
+import { toLeanTask, toTaskWrite } from "../projection.ts";
+import type { Resolver } from "../resolver.ts";
+import { jsonResult } from "./result.ts";
+import { clearableDueField, priorityField } from "./task-fields.ts";
+import { resolveTaskTarget, taskTargetShape } from "./task-target.ts";
 
 export function registerUpdateTaskTool(
   server: McpServer,
@@ -52,6 +52,12 @@ export function registerUpdateTaskTool(
             'Due date as an RFC3339 timestamp, "2026-07-25T09:00:00Z". An empty string clears it.',
           ),
       }),
+      // Destructive, and declared so rather than left to the MCP default: replacing a
+      // description overwrites it with no history to recover the old text from — the same
+      // irreversibility vikunja_update_comment names. The default already resolves to `true`, so
+      // stating it changes nothing for a client that applies the defaults and moves a client that
+      // reads hints verbatim from unstated to explicit `true`, the conservative direction.
+      annotations: { destructiveHint: true },
     },
     async ({ task, id, title, description, done, priority, due }) => {
       const write = toTaskWrite({ title, description, done, priority, due });

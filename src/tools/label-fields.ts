@@ -16,9 +16,9 @@
  * as a required argument that cannot go missing by accident.
  */
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import type { LabelRef, Resolver } from "../resolver.js";
-import type { LabelFields, LabelWrite, LeanLabel, RawLabel } from "../types.js";
+import type { VikunjaClient } from "../client.ts";
+import type { LabelRef, Resolver } from "../resolver.ts";
+import type { LabelFields, LabelWrite, LeanLabel, RawLabel } from "../types.ts";
 
 /**
  * A label as an agent names it: the title it read in a listing, or the id printed beside it.

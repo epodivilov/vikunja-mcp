@@ -12,11 +12,11 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import { toLeanTask } from "../projection.js";
-import type { Resolver } from "../resolver.js";
-import { jsonResult } from "./result.js";
-import { resolveTaskTarget, taskTargetShape } from "./task-target.js";
+import type { VikunjaClient } from "../client.ts";
+import { toLeanTask } from "../projection.ts";
+import type { Resolver } from "../resolver.ts";
+import { jsonResult } from "./result.ts";
+import { resolveTaskTarget, taskTargetShape } from "./task-target.ts";
 
 /** A label as an agent names it: the title it read in a listing, or the id printed beside it. */
 const labelRef = z.union([z.string(), z.number().int().positive()]);

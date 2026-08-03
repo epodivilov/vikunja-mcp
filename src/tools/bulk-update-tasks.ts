@@ -17,12 +17,12 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import { toLeanTask, toTaskWrite } from "../projection.js";
-import type { Resolver } from "../resolver.js";
-import { jsonResult } from "./result.js";
-import { clearableDueField, priorityField } from "./task-fields.js";
-import { applyBulkUpdate, bulkTaskTargetShape } from "./task-target.js";
+import type { VikunjaClient } from "../client.ts";
+import { toLeanTask, toTaskWrite } from "../projection.ts";
+import type { Resolver } from "../resolver.ts";
+import { jsonResult } from "./result.ts";
+import { clearableDueField, priorityField } from "./task-fields.ts";
+import { applyBulkUpdate, bulkTaskTargetShape } from "./task-target.ts";
 
 export function registerBulkUpdateTasksTool(
   server: McpServer,
@@ -68,10 +68,11 @@ export function registerBulkUpdateTasksTool(
       // discarded — which is why those are refused outright rather than retried. What keeps the
       // hint false is that the set is re-resolved on every call, so a retry can legitimately land
       // differently: a target that has since gained an assignee, a reminder or a favourite now
-      // refuses the whole call. `destructiveHint` is left at its default rather than claimed
-      // false — this overwrites the named fields on every task in the set, with no history to
-      // recover the old values from.
-      annotations: { idempotentHint: false },
+      // refuses the whole call. `destructiveHint` is declared `true` rather than left to the MCP
+      // default: this overwrites the named fields on every task in the set, with no history to
+      // recover the old values from. The default already resolves to `true`, so stating it is the
+      // conservative direction — explicit for a client that reads hints verbatim.
+      annotations: { destructiveHint: true, idempotentHint: false },
     },
     async ({ tasks, ids, done, priority, due }) =>
       jsonResult(

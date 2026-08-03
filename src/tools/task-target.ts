@@ -11,9 +11,9 @@
  * that has to be provable is kept in one file with nothing but zod behind it.
  */
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import type { Resolver } from "../resolver.js";
-import type { LeanTask, RawTask, TaskWrite } from "../types.js";
+import type { VikunjaClient } from "../client.ts";
+import type { Resolver } from "../resolver.ts";
+import type { LeanTask, RawTask, TaskWrite } from "../types.ts";
 
 export const taskTargetShape = {
   task: z

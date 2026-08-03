@@ -86,10 +86,10 @@ travel in the URL because the server matches them — a comment id belonging to 
 notes); both tools say so, because the 403 is otherwise unexplainable from the agent's side.
 
 The comment tools' shared body — `resolveCommentTarget` and `applyCommentUpdate` — lives in
-`tools/task-target.ts`, not in the four tool files, and that placement is deliberate: a module
-whose only runtime import is zod is one a `node --test` suite can load, and a tool file is not.
-Anything worth proving goes there; what stays in a tool file (the schema, the annotations, the
-one call) is unproved by construction. `vikunja_bulk_update_tasks` follows the same rule for the
+`tools/task-target.ts`, not in the four tool files, and that placement is deliberate: the shared
+body is the substance worth proving, so it lives in one module a test drives directly rather than
+being restated in each tool file. What stays in a tool file is the schema, the annotations and the
+one call. `vikunja_bulk_update_tasks` follows the same rule for the
 same reason — `resolveBulkTargets`, `findBulkBlockers` and `applyBulkUpdate` are all in that
 module, because the ordering the tool depends on (resolve, vet, *then* write) is exactly what a
 restated test body would leave unproved.
@@ -103,9 +103,12 @@ rather than imported, and a test that calls the shipped functions rather than a 
 
 The bodies belong there for a reason worth stating plainly, because the first cut of this work
 put them in the registration files and a green suite said nothing: the duplicate-title check, the
-delete guard and the rename-side title check could each be deleted with all 337 tests still
-passing. A tool file is unproved by construction, so what it holds must be a schema, its
-annotations and one call — nothing that can be wrong.
+delete guard and the rename-side title check could each be deleted with all 379 tests still
+passing — nothing exercised the tool files that held them. Since VMCP-31 a tool file *can* be
+loaded under `node --test` (see "Checks"), and `test/tools.test.ts` covers the glue each one owns:
+its registration, its annotations, and the two guards that live only in a tool file. The logic
+worth proving still lives in the shared module and is tested there directly, so a tool file stays a
+schema, its annotations and one call.
 
 ## Invariants
 
@@ -526,26 +529,25 @@ npm run build
 ```
 
 Tests live in `test/`, not `src/` — `src` is the build root and `files: ["dist"]` would publish
-them. They run through `node --test` on the TypeScript directly, so **development needs Node
-22.6+** even though the shipped code still supports the `engines` floor of 20. `tsc` **does**
+them. They run through `node --test` on the TypeScript directly, so **development needs Node 22.18+**
+(the `devEngines.runtime` floor), a touch newer than the shipped code's `engines` floor of 22. `tsc` **does**
 typecheck `test/`: `npm run typecheck` runs `tsconfig.check.json`, whose `include` is
 `["src", "test"]` — only the emitting `tsconfig.json` is scoped to `src`. Biome lints it too. So
 widening a `Raw*` type breaks every fixture that builds one, and that is a red build to fix with
 the change, not a nit to leave behind.
 
-Running the TypeScript directly, **combined with this repo's `.js`-specifier import convention**,
-has one consequence worth knowing before moving code: the type-stripping loader does not resolve
-`./projection.js` to `projection.ts`, so a `src` module that imports another one's **value**
-cannot be loaded by a test — and neither can any test that imports it, transitively. That is why
-`src/tools/*` is untestable (every tool imports `projection`/`result` for real) while `client`,
-`resolver`, `projection` and `types` are not: they import each other for types only, and a type
-import is erased. Until that changes, a shared runtime constant belongs in `types.ts`, which
-nothing imports for values.
-
-It is a convention, not a law: TypeScript's `rewriteRelativeImportExtensions` (5.7+, and 5.9 is
-what is installed) would let `src` import by `.ts` specifier and still emit `.js`, which would
-make the tool files importable and testable. That is a repo-wide change and belongs to its own
-task — do not do it as a side effect of something else.
+Every relative import under `src/` names the `.ts` file it points at, not a `.js` one — and
+`tsconfig.json` sets `rewriteRelativeImportExtensions` with `allowImportingTsExtensions`, so `tsc`
+still emits `.js` specifiers into `dist/` while the source carries `.ts`. That is what lets
+`node --test` load a `src` module directly: the type-stripping loader resolves the literal
+specifier, and a `.ts` one names a file that exists where the old `.js` one named nothing (the
+loader does not rewrite `.js` to `.ts`). So `src/tools/*` is as loadable as any other module —
+`test/tools.test.ts` loads `src/register-tools.ts` and every tool file it pulls in — and a shared
+runtime constant may live wherever it belongs rather than being routed into `types.ts` to dodge a
+value import. Only **relative** specifiers carry `.ts`: bare package specifiers ending in `.js`
+(`@modelcontextprotocol/sdk/server/mcp.js`) are left exactly as they are. The emitted
+`dist/**/*.d.ts` keep their `.ts` specifiers — `rewriteRelativeImportExtensions` rewrites the JS
+emit only — which is harmless while `package.json` exports no types.
 
 `projection.ts` is pure, so its edge cases are cheap to pin. Anything learned about the live
 server's actual shapes belongs in `test/projection.test.ts` as a case, not in a commit message.

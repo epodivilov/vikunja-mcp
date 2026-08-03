@@ -12,11 +12,11 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import { toLabelWrite, toLeanLabel } from "../projection.js";
-import type { Resolver } from "../resolver.js";
-import { applyLabelCreate, labelColorField, labelTitleField } from "./label-fields.js";
-import { jsonResult } from "./result.js";
+import type { VikunjaClient } from "../client.ts";
+import { toLabelWrite, toLeanLabel } from "../projection.ts";
+import type { Resolver } from "../resolver.ts";
+import { applyLabelCreate, labelColorField, labelTitleField } from "./label-fields.ts";
+import { jsonResult } from "./result.ts";
 
 export function registerCreateLabelTool(
   server: McpServer,

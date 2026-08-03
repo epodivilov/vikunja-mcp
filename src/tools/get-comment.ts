@@ -6,11 +6,11 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { VikunjaClient } from "../client.js";
-import { toLeanComment } from "../projection.js";
-import type { Resolver } from "../resolver.js";
-import { jsonResult } from "./result.js";
-import { commentTargetShape, resolveCommentTarget } from "./task-target.js";
+import type { VikunjaClient } from "../client.ts";
+import { toLeanComment } from "../projection.ts";
+import type { Resolver } from "../resolver.ts";
+import { jsonResult } from "./result.ts";
+import { commentTargetShape, resolveCommentTarget } from "./task-target.ts";
 
 export function registerGetCommentTool(
   server: McpServer,

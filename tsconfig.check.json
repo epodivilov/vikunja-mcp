@@ -1,14 +1,14 @@
 {
   // Type-check-only view of the repo. tsconfig.json exists to emit dist/ and so is
   // scoped to src/ with a rootDir; the tests live outside it and import each other by
-  // .ts specifier, which is legal only when nothing is emitted. Without this config the
-  // suite is checked by nothing: tsc never sees it and `node --test` strips its types
-  // without reading them.
+  // .ts specifier. `allowImportingTsExtensions` (and `rewriteRelativeImportExtensions`)
+  // are now set on the base config — src carries .ts specifiers too — so this config
+  // inherits both and no longer sets them itself. Without this config the suite is checked
+  // by nothing: tsc never sees it and `node --test` strips its types without reading them.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
-    "allowImportingTsExtensions": true,
     "declaration": false,
     "sourceMap": false
   },
