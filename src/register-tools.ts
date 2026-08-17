@@ -15,6 +15,7 @@ import { registerCommentTaskTool } from "./tools/comment-task.ts";
 import { registerCompleteTaskTool } from "./tools/complete-task.ts";
 import { registerCreateLabelTool } from "./tools/create-label.ts";
 import { registerCreateTaskTool } from "./tools/create-task.ts";
+import { registerCreateTasksTool } from "./tools/create-tasks.ts";
 import { registerDeleteCommentTool } from "./tools/delete-comment.ts";
 import { registerDeleteLabelTool } from "./tools/delete-label.ts";
 import { registerDeleteTaskTool } from "./tools/delete-task.ts";
@@ -59,6 +60,7 @@ export function registerAllTools(
   // Write tools. One per operation, and never behind a shared `subcommand` argument: an MCP
   // client has to be able to allow creating a task without also allowing deleting one.
   registerCreateTaskTool(server, client, resolver);
+  registerCreateTasksTool(server, client, resolver);
   registerUpdateTaskTool(server, client, resolver);
   registerBulkUpdateTasksTool(server, client, resolver);
   registerCompleteTaskTool(server, client, resolver);

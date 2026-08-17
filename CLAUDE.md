@@ -61,6 +61,7 @@ primary reason this project exists.
 | `vikunja_list_comments` | read | a task's comments as `LeanComment` rows, bodies as markdown |
 | `vikunja_get_comment` | read | one comment, by task + numeric `commentId` |
 | `vikunja_create_task` | write | markdown description accepted; `assignees` ride along in the create |
+| `vikunja_create_tasks` | write | create many tasks in one project in one call — no native bulk endpoint, so it loops `PUT /projects/{p}/tasks`. Two-phase: resolves the project and every item's labels/assignees first (all-or-nothing; a bad name or empty array throws, writes nothing), then creates in order collecting `{ created, failed }` — the one write tool that reports per-item failure instead of throwing. Labels attach one-by-one after each create, so a created-but-unlabelled task is possible and its failure names the created id |
 | `vikunja_update_task` | write | partial fields incl. `done` |
 | `vikunja_bulk_update_tasks` | write | one `done`/`priority`/`due` across many tasks, through `POST /tasks/bulk` — one transaction, the API's only genuine partial write. Refuses the whole call when any named task carries assignees or reminders or is a favourite (the endpoint destroys all three), and — only when `done` is being set — when any of them repeats (the completion does not stick) |
 | `vikunja_complete_task` | write | convenience over update |

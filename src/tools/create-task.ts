@@ -8,6 +8,7 @@ import { toLeanTask, toTaskWrite } from "../projection.ts";
 import type { Resolver } from "../resolver.ts";
 import { jsonResult } from "./result.ts";
 import { dueField, priorityField } from "./task-fields.ts";
+import { resolveProjectTarget } from "./task-target.ts";
 import { usersField } from "./user-fields.ts";
 
 export function registerCreateTaskTool(
@@ -66,7 +67,7 @@ export function registerCreateTaskTool(
       annotations: { destructiveHint: false },
     },
     async ({ project, projectId, title, description, priority, due, labels, assignees }) => {
-      const targetProject = await resolveProject(resolver, project, projectId);
+      const targetProject = await resolveProjectTarget(resolver, project, projectId);
       // Both resolved before the task exists: an unknown or ambiguous name then fails with nothing
       // written, rather than leaving a task behind that is missing half its labels or assignees.
       const labelIds = labels === undefined ? [] : await resolver.resolveLabelIds(labels);
@@ -104,30 +105,4 @@ export function registerCreateTaskTool(
       return jsonResult(toLeanTask(task));
     },
   );
-}
-
-async function resolveProject(
-  resolver: Resolver,
-  key: string | undefined,
-  id: number | undefined,
-): Promise<number> {
-  const trimmed = key?.trim();
-
-  if (trimmed && id !== undefined) {
-    throw new Error(
-      `Pass either the project key ("${trimmed}") or { projectId: ${id} }, not both — they may name different projects.`,
-    );
-  }
-
-  if (id !== undefined) {
-    return id;
-  }
-
-  if (!trimmed) {
-    throw new Error(
-      'Which project? Pass its key, e.g. { project: "INFRA" }, or its id as { projectId: 3 }. List projects to see the keys in use.',
-    );
-  }
-
-  return resolver.resolveProjectKey(trimmed);
 }
