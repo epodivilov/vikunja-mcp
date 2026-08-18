@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.epodivilov/vikunja-mcp",
+  "title": "Vikunja",
+  "description": "Lean MCP server for Vikunja: compact task payloads and project keys like INFRA-41, not opaque IDs.",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/epodivilov/vikunja-mcp",
+  "repository": {
+    "url": "https://github.com/epodivilov/vikunja-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@epodivilov/vikunja-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "VIKUNJA_API_TOKEN",
+          "description": "Vikunja API token used to authenticate every request.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "VIKUNJA_URL",
+          "description": "Vikunja API base URL (http/https). Defaults to http://localhost:3456/api/v1.",
+          "isRequired": false,
+          "default": "http://localhost:3456/api/v1"
+        }
+      ]
+    }
+  ]
+}
