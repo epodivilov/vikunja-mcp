@@ -40,6 +40,42 @@ export interface LeanTask {
 }
 
 /**
+ * One spec in a `vikunja_create_tasks` call that could not be created, once execution reached it.
+ *
+ * `index` is the 0-based position in the input `tasks` array, so the caller can line a failure up
+ * against exactly the spec it sent — the created rows and the failures are two disjoint lists, not
+ * a single positional one. `error` is the server's message, or — when the task was created but a
+ * later label attach failed — a message naming the created id so the half-finished task can be
+ * found rather than re-created.
+ */
+export interface BulkItemFailure {
+  index: number;
+  error: string;
+}
+
+/**
+ * The consolidated outcome of a `vikunja_create_tasks` call: the tasks that were created as lean
+ * rows, and the specs that failed with their input position and reason. Only the execution phase
+ * populates `failed`; a phase-1 name-resolution failure throws instead, having written nothing.
+ */
+export interface CreatedTasks {
+  created: LeanTask[];
+  failed: BulkItemFailure[];
+}
+
+/**
+ * The consolidated outcome of a `vikunja_update_tasks` call: the tasks that changed as lean rows,
+ * and the items that could not with their input position and reason. Shaped exactly like
+ * `CreatedTasks`, and populated the same way — only the execution phase records a `failed`, while a
+ * phase-1 validation failure (a bad, unresolvable or twice-named target, an empty list, an item
+ * with no field to change) throws instead, having written nothing.
+ */
+export interface UpdatedTasks {
+  updated: LeanTask[];
+  failed: BulkItemFailure[];
+}
+
+/**
  * One related task, named the way everything else here is: by key. `kind` is Vikunja's own
  * vocabulary (`RELATION_KINDS`), read from the perspective of the task carrying the relation —
  * a `blocking` entry is a task this one blocks.

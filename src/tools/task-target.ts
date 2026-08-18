@@ -12,8 +12,16 @@
  */
 import { z } from "zod";
 import type { VikunjaClient } from "../client.ts";
-import type { Resolver } from "../resolver.ts";
-import type { LeanTask, RawTask, TaskWrite } from "../types.ts";
+import type { LabelRef, Resolver, UserRef } from "../resolver.ts";
+import type {
+  BulkItemFailure,
+  CreatedTasks,
+  LeanTask,
+  RawTask,
+  TaskFields,
+  TaskWrite,
+  UpdatedTasks,
+} from "../types.ts";
 
 export const taskTargetShape = {
   task: z
@@ -404,6 +412,347 @@ export async function applyBulkUpdate(
   // back — its tasks never went through `setIdentifier`, so they carry no key at all — and the
   // server does not always apply a `done` as asked.
   return (await resolveBulkTargets(client, resolver, target)).map(toLeanTask);
+}
+
+/**
+ * How a create tool is pointed at the one project it writes into: a key, or the global id as the
+ * escape hatch — the same pair every other target here offers, and the same two rules.
+ *
+ * A key goes through `resolver.resolveProjectKey`; a numeric id is passed through **ungated**, with
+ * no archived-project pre-check, because the id is an escape hatch and an escape hatch is never the
+ * stricter path — the server's own write refuses an archived project with a 412, and that refusal
+ * is honest where a listing's `[]` is not. Both together is refused: they may name different
+ * projects. It lives here, beside `resolveTaskTarget`, so `create_task` and `create_tasks` share
+ * one spelling and one set of refusals rather than each carrying a private copy — and it needs only
+ * the resolver, a type-only import, so this module stays loadable under `node --test`.
+ */
+export async function resolveProjectTarget(
+  resolver: Resolver,
+  key: string | undefined,
+  id: number | undefined,
+): Promise<number> {
+  const trimmed = key?.trim();
+
+  if (trimmed && id !== undefined) {
+    throw new Error(
+      `Pass either the project key ("${trimmed}") or { projectId: ${id} }, not both — they may name different projects.`,
+    );
+  }
+
+  if (id !== undefined) {
+    return id;
+  }
+
+  if (!trimmed) {
+    throw new Error(
+      'Which project? Pass its key, e.g. { project: "INFRA" }, or its id as { projectId: 3 }. List projects to see the keys in use.',
+    );
+  }
+
+  return resolver.resolveProjectKey(trimmed);
+}
+
+/** Which project a `vikunja_create_tasks` call writes into — a key, or the global id escape hatch. */
+export interface CreateTasksTarget {
+  project?: string | undefined;
+  projectId?: number | undefined;
+}
+
+/**
+ * One task to create: the same per-task fields `vikunja_create_task` accepts, one project up.
+ * `labels` and `assignees` are names (titles/usernames) or ids, resolved before any write; an
+ * absent or empty list means none, which is not an error.
+ */
+export interface CreateTaskSpec {
+  title: string;
+  description?: string | undefined;
+  priority?: number | undefined;
+  due?: string | undefined;
+  labels?: readonly LabelRef[] | undefined;
+  assignees?: readonly UserRef[] | undefined;
+}
+
+/** A spec with its labels and assignees already resolved to ids — the output of phase 1. */
+interface ResolvedSpec {
+  fields: TaskFields;
+  labelIds: number[];
+  assigneeIds: number[];
+}
+
+/** The reason to record for a failed spec: the error's own message, or its string form. */
+function reasonOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * The whole body of `vikunja_create_tasks`: resolve the project and every item's names first
+ * (all-or-nothing), then create each task in input order collecting per-item outcomes
+ * (best-effort). It lives here rather than in the tool file for the reason `applyBulkUpdate` does —
+ * a test can load this module (zod is its only runtime import) and cannot load a tool.
+ *
+ * The two phases are the substance, and their asymmetry is deliberate. **Phase 1** resolves the
+ * project once and every spec's labels and assignees before the first `createTask`, so an
+ * unresolvable or ambiguous name — a bad label title, a username no member has, an unknown project
+ * — throws with **nothing written**, upholding this project's "an unresolvable name changes
+ * nothing" guarantee across a whole batch. An empty `specs` is refused the same way, before any
+ * request. **Phase 2** then creates the tasks: a per-item write failure is *collected*, not thrown,
+ * so one rejected create or label attach neither stops the rest nor loses the ones that worked —
+ * the single place in this server where a write tool answers with partial failure rather than an
+ * all-or-nothing throw. There is no native bulk-create endpoint, so this loops `PUT
+ * /projects/{p}/tasks`; that non-atomicity is why the collect-all contract exists.
+ *
+ * Assignees ride along in the create body — Vikunja writes them in the task's own transaction and
+ * rolls that one task back if an id is refused, so a rejected assignee leaves no task behind and is
+ * an ordinary phase-2 create failure (an *unknown* assignee username, by contrast, is a phase-1
+ * failure). Labels do not ride along: `addTaskLabel` is a separate write per label, so a task can
+ * be created and then fail to be labelled — a real intermediate state, which is why that failure's
+ * message names the created id.
+ *
+ * Each created row is read back rather than projected from the create response: that response
+ * carries `labels: null` and echoes assignees as bare `{ id }` objects with no username, so it
+ * describes neither the labels just attached nor the assignees as stored. `toTaskWrite` and
+ * `toLeanTask` are parameters rather than imports for the same reason `applyBulkUpdate` takes them:
+ * a `.js` value import of `../projection.js` would make this module unloadable.
+ */
+export async function applyBulkCreate(
+  client: VikunjaClient,
+  resolver: Resolver,
+  target: CreateTasksTarget,
+  specs: readonly CreateTaskSpec[],
+  toTaskWrite: (fields: TaskFields) => TaskWrite,
+  toLeanTask: (task: RawTask) => LeanTask,
+): Promise<CreatedTasks> {
+  // Refused before the project is even resolved: an empty batch has nothing to write and nothing
+  // to look up, and the schema's own `.min(1)` does not reach a caller that drives this body direct.
+  if (specs.length === 0) {
+    throw new Error("No tasks to create: pass at least one task in `tasks`.");
+  }
+
+  // Phase 1 — resolve everything, all-or-nothing. The project once, then every spec's labels and
+  // assignees; any throw here leaves the instance untouched, since nothing below has run yet.
+  const projectId = await resolveProjectTarget(resolver, target.project, target.projectId);
+  const resolved: ResolvedSpec[] = [];
+
+  for (const spec of specs) {
+    const labelIds = spec.labels === undefined ? [] : await resolver.resolveLabelIds(spec.labels);
+    const assigneeIds =
+      spec.assignees === undefined
+        ? []
+        : await resolver.resolveAssigneeIds(projectId, [], spec.assignees);
+
+    resolved.push({
+      fields: {
+        title: spec.title,
+        description: spec.description,
+        priority: spec.priority,
+        due: spec.due,
+      },
+      labelIds,
+      assigneeIds,
+    });
+  }
+
+  // Phase 2 — create in input order, collecting outcomes. Nothing here throws: a per-item failure
+  // is recorded against its input position and the loop moves on.
+  const created: LeanTask[] = [];
+  const failed: BulkItemFailure[] = [];
+
+  for (let index = 0; index < resolved.length; index += 1) {
+    const item = resolved[index];
+    if (item === undefined) continue;
+
+    let row: RawTask;
+    try {
+      row = await client.createTask(projectId, toTaskWrite(item.fields), item.assigneeIds);
+    } catch (cause) {
+      failed.push({ index, error: reasonOf(cause) });
+      continue;
+    }
+
+    // The task now exists. A label attach that fails from here leaves it created-but-unlabelled,
+    // so the failure names the created id rather than pretending nothing happened.
+    let labelFailure: string | undefined;
+    for (const labelId of item.labelIds) {
+      try {
+        await client.addTaskLabel(row.id, labelId);
+      } catch (cause) {
+        labelFailure = `The task was created (id ${row.id}) but attaching label ${labelId} failed: ${reasonOf(cause)}`;
+        break;
+      }
+    }
+    if (labelFailure !== undefined) {
+      failed.push({ index, error: labelFailure });
+      continue;
+    }
+
+    // Read back rather than project the create response — it reports `labels: null` and usernameless
+    // assignees, neither of which is what the task now carries. A read is the only true answer.
+    try {
+      created.push(toLeanTask(await client.getTask(row.id)));
+    } catch (cause) {
+      failed.push({
+        index,
+        error: `The task was created (id ${row.id}) but reading it back failed: ${reasonOf(cause)}`,
+      });
+    }
+  }
+
+  return { created, failed };
+}
+
+/**
+ * One task to update: how it is addressed (`taskTargetShape` — a key or the id escape hatch) plus
+ * its OWN patch, the same per-task fields `vikunja_update_task` accepts. Unlike a bulk update, no
+ * two items share a `values` object: each carries the fields it means to change, and at least one.
+ * `labels` and `assignees` are absent by design — they are not task-update fields, and the schema
+ * refuses them per item, exactly as `update_task` does.
+ */
+export interface UpdateTaskSpec extends TaskTarget, TaskFields {}
+
+/**
+ * One update item after phase 1: its input position, the write to apply, and the task it resolved
+ * to. A discriminated union while unresolved so a key item and an id item stay type-distinct — a
+ * key item consumes the batched `resolveTasks` answer in order, an id item its own `getTask`.
+ */
+type PreparedUpdate =
+  | { index: number; write: TaskWrite; kind: "key"; key: string }
+  | { index: number; write: TaskWrite; kind: "id"; id: number };
+
+/**
+ * The whole body of `vikunja_update_tasks`: a heterogeneous read-modify-write loop over
+ * `update_task`'s path. It lives here rather than in the tool file for the reason `applyBulkCreate`
+ * does — a test can load this module (zod is its only runtime import) and cannot load a tool.
+ *
+ * This is deliberately NOT the native `POST /tasks/bulk`: that endpoint broadcasts one `values`
+ * object across every id and destroys assignees, reminders and favourites doing it, so it fits an
+ * identical-value batch and nothing else. Here every item carries its own patch, and each is applied
+ * through `client.updateTask`, whose read-modify-write layers the patch onto the task the server
+ * currently has — which is exactly what keeps a `{ done: true }` from stripping the task's other
+ * data. The homogeneous case stays the job of `vikunja_bulk_update_tasks`.
+ *
+ * **Phase 1** validates and resolves everything, all-or-nothing. Each item's write is built and an
+ * item that names no field is refused — before any request, since that is a fault in the caller's
+ * own arguments. Keys are then resolved in one batch through `resolver.resolveTasks` (one request
+ * per project), and `id`-addressed items one at a time through `client.getTask` — never through
+ * `resolveBulkTargets`, which carries a single shared patch and silently dedups repeated ids. Here a
+ * repeat is a **conflict**, not a coalesce: two patches for one task would apply in an order the
+ * caller cannot control, so the same task named twice — by two keys, or a key and its id — fails the
+ * whole call. An unresolvable, ambiguous, archived or nonexistent target fails it too. Any throw
+ * here leaves the instance untouched: nothing below has run.
+ *
+ * **Phase 2** applies each patch in input order, collecting outcomes. Nothing here throws: a
+ * per-item write failure is recorded against its input position and the loop moves on — the same
+ * collect-all contract `applyBulkCreate` follows, and for the same reason (there is no atomic
+ * multi-task partial-update endpoint that could serve differing patches). Each task is read back
+ * rather than projected from the update response, because `POST /tasks/{id}` does not fill
+ * `identifier` in on that path, so the task's own key would come back empty.
+ *
+ * `toTaskWrite` and `toLeanTask` are parameters rather than imports for the reason `applyBulkUpdate`
+ * takes them: a `.js` value import of `../projection.js` would make this module unloadable. Both are
+ * required, so neither can go missing by accident.
+ */
+export async function applyTaskUpdates(
+  client: VikunjaClient,
+  resolver: Resolver,
+  updates: readonly UpdateTaskSpec[],
+  toTaskWrite: (fields: TaskFields) => TaskWrite,
+  toLeanTask: (task: RawTask) => LeanTask,
+): Promise<UpdatedTasks> {
+  // Refused before anything is resolved: an empty batch has nothing to write and nothing to look
+  // up, and the schema's own `.min(1)` does not reach a caller that drives this body direct.
+  if (updates.length === 0) {
+    throw new Error("No tasks to update: pass at least one item in `updates`.");
+  }
+
+  // Phase 1a — build every patch and classify every target, all pure, so a fault in the caller's
+  // own arguments (an empty patch, both/neither address) throws before a single request goes out.
+  const prepared: PreparedUpdate[] = [];
+  const keys: string[] = [];
+
+  for (let index = 0; index < updates.length; index += 1) {
+    const spec = updates[index];
+    if (spec === undefined) continue;
+
+    const write = toTaskWrite({
+      title: spec.title,
+      description: spec.description,
+      done: spec.done,
+      priority: spec.priority,
+      due: spec.due,
+    });
+    if (Object.keys(write).length === 0) {
+      throw new Error(
+        `Item ${index} changes nothing: pass at least one of title, description, done, priority, due.`,
+      );
+    }
+
+    const key = spec.task?.trim();
+    if (key && spec.id !== undefined) {
+      throw new Error(
+        `Item ${index}: pass either task ("${key}") or { id: ${spec.id} }, not both — they may name different tasks.`,
+      );
+    }
+    if (key) {
+      keys.push(key);
+      prepared.push({ index, write, kind: "key", key });
+    } else if (spec.id !== undefined) {
+      prepared.push({ index, write, kind: "id", id: spec.id });
+    } else {
+      throw new Error(
+        `Item ${index}: which task? Pass its key, e.g. { task: "INFRA-41" }, or its global id as { id: 123 }.`,
+      );
+    }
+  }
+
+  // Phase 1b — resolve. Keys in one batch per project; ids one at a time. `resolveTasks` answers in
+  // the order the keys were named, so a key item consumes it by position.
+  const named = await resolver.resolveTasks(keys);
+  const resolved: { index: number; task: RawTask; write: TaskWrite }[] = [];
+  let cursor = 0;
+
+  for (const item of prepared) {
+    let task: RawTask;
+    if (item.kind === "key") {
+      const match = named[cursor];
+      cursor += 1;
+      if (match === undefined) continue;
+      task = match;
+    } else {
+      task = await client.getTask(item.id);
+    }
+    resolved.push({ index: item.index, task, write: item.write });
+  }
+
+  // Phase 1c — refuse the same task targeted twice. Only knowable after resolution, since a key and
+  // an id can name one task. Two patches for one task is an order-dependent conflict, not a merge.
+  const firstSeenAt = new Map<number, number>();
+  for (const item of resolved) {
+    const earlier = firstSeenAt.get(item.task.id);
+    if (earlier !== undefined) {
+      throw new Error(
+        `Item ${item.index} targets ${item.task.identifier} (id ${item.task.id}), already targeted by item ${earlier}. A task may appear once in this call — two patches for one task would apply in an order you cannot control. Merge them into one item.`,
+      );
+    }
+    firstSeenAt.set(item.task.id, item.index);
+  }
+
+  // Phase 2 — apply in input order, collecting outcomes. Nothing here throws: a per-item failure is
+  // recorded against its input position and the loop moves on.
+  const updated: LeanTask[] = [];
+  const failed: BulkItemFailure[] = [];
+
+  for (const item of resolved) {
+    try {
+      await client.updateTask(item.task.id, item.write);
+      // Read back rather than project the update response — the server does not fill `identifier`
+      // on that path, so the task's own key would come back empty. A read always carries it.
+      updated.push(toLeanTask(await client.getTask(item.task.id)));
+    } catch (cause) {
+      failed.push({ index: item.index, error: reasonOf(cause) });
+    }
+  }
+
+  return { updated, failed };
 }
 
 /**
