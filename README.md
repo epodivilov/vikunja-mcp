@@ -1,6 +1,20 @@
 # vikunja-mcp
 
+[![npm version](https://img.shields.io/npm/v/@epodivilov/vikunja-mcp)](https://www.npmjs.com/package/@epodivilov/vikunja-mcp)
+[![license](https://img.shields.io/npm/l/@epodivilov/vikunja-mcp)](https://www.npmjs.com/package/@epodivilov/vikunja-mcp)
+[![node](https://img.shields.io/node/v/@epodivilov/vikunja-mcp)](https://www.npmjs.com/package/@epodivilov/vikunja-mcp)
+
 A lean, identifier-native [Model Context Protocol](https://modelcontextprotocol.io) server for [Vikunja](https://vikunja.io).
+
+## Why vikunja-mcp
+
+- **Compact payloads** — every response is projected to a lean DTO, never a raw Vikunja API object. Measured against a live instance, that is 39x smaller on a project listing and 10x on a task listing, so reading a whole project stays cheap.
+- **Project-scoped keys** — tasks are addressed by the project key the Vikunja UI shows (`INFRA-41`), not an opaque global id, so humans and agents always mean the same task.
+- **One tool per operation** — reads and writes are separate tools, so an MCP client can allow-list the reads permanently without ever granting a write or a delete.
+- **Env-only config, zero telemetry** — the only host it talks to is your `VIKUNJA_URL`; there are no third-party calls and nothing to opt out of.
+- **Markdown in and out** — task and comment bodies are markdown to the agent and converted (and sanitized) to Vikunja's HTML on the way in, so the model never has to touch raw HTML.
+
+## The problems it fixes
 
 It exists because the existing Vikunja MCP servers share three problems:
 
