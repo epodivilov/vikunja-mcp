@@ -64,6 +64,18 @@ export interface CreatedTasks {
 }
 
 /**
+ * The consolidated outcome of a `vikunja_update_tasks` call: the tasks that changed as lean rows,
+ * and the items that could not with their input position and reason. Shaped exactly like
+ * `CreatedTasks`, and populated the same way — only the execution phase records a `failed`, while a
+ * phase-1 validation failure (a bad, unresolvable or twice-named target, an empty list, an item
+ * with no field to change) throws instead, having written nothing.
+ */
+export interface UpdatedTasks {
+  updated: LeanTask[];
+  failed: BulkItemFailure[];
+}
+
+/**
  * One related task, named the way everything else here is: by key. `kind` is Vikunja's own
  * vocabulary (`RELATION_KINDS`), read from the perspective of the task carrying the relation —
  * a `blocking` entry is a task this one blocks.

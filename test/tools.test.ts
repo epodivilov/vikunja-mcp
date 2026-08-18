@@ -32,11 +32,12 @@ const READ_TOOLS = [
   "vikunja_get_comment",
 ];
 
-/** The 19 write tools of the same table, none of which may carry `readOnlyHint`. */
+/** The 20 write tools of the same table, none of which may carry `readOnlyHint`. */
 const WRITE_TOOLS = [
   "vikunja_create_task",
   "vikunja_create_tasks",
   "vikunja_update_task",
+  "vikunja_update_tasks",
   "vikunja_bulk_update_tasks",
   "vikunja_complete_task",
   "vikunja_comment_task",
@@ -153,9 +154,9 @@ describe("R1: the tool modules load under node --test", () => {
 });
 
 describe("R3: the registration list", () => {
-  it("registers exactly 27 tools and makes no network request", () => {
+  it("registers exactly 28 tools and makes no network request", () => {
     const tools = registerAll();
-    assert.equal(tools.size, 27);
+    assert.equal(tools.size, 28);
   });
 
   it("registers exactly the tools named in the CLAUDE.md surface table, and nothing else", () => {
