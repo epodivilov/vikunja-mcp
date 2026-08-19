@@ -54,9 +54,30 @@ jobs:
       # input WITHOUT a shell, so a literal `&&` here is parsed as extra args to `changeset` and the
       # bump silently no-ops (it did -- that is what left #17 empty on the first attempt).
       - uses: changesets/action@v1
+        id: changesets
         with:
           version: npm run changeset:version
           publish: npx changeset publish
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # changesets/action's `title` input is a STATIC string evaluated before `changeset
+      # version` runs, so it cannot carry the bumped version. This step runs AFTER the action has
+      # pushed the bumped package.json to the PR head and retitles the just-opened/updated
+      # "Version Packages" PR to `release: <pkg>@<version>`, which also serves as the squash-merge
+      # commit subject. Skipped on the publish push (no PR number). Single-package repo, so the
+      # version is read from package.json on the PR branch via the Contents API -- a local read
+      # can be stale, since actions/checkout's narrow fetch leaves origin/<branch> behind the
+      # action's force-push of the bump.
+      - name: Retitle the Version Packages PR with the bumped version
+        if: steps.changesets.outputs.pullRequestNumber
+        continue-on-error: true # a cosmetic retitle must never fail a release run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pr='${{ steps.changesets.outputs.pullRequestNumber }}'
+          branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
+          version=$(gh api "repos/${{ github.repository }}/contents/package.json?ref=$branch" \
+            -H "Accept: application/vnd.github.raw" | jq -r .version)
+          gh pr edit "$pr" --title "release: @epodivilov/vikunja-mcp@$version"
