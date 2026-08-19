@@ -3,7 +3,7 @@
   "name": "io.github.epodivilov/vikunja-mcp",
   "title": "Vikunja",
   "description": "Lean MCP server for Vikunja: compact task payloads and project keys like INFRA-41, not opaque IDs.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "websiteUrl": "https://github.com/epodivilov/vikunja-mcp",
   "repository": {
     "url": "https://github.com/epodivilov/vikunja-mcp",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@epodivilov/vikunja-mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       },
