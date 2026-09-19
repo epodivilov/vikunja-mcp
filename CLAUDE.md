@@ -60,6 +60,8 @@ primary reason this project exists.
 | `vikunja_list_members` | read | users a project can assign to, as `{ id, username, name? }`; never an email |
 | `vikunja_list_comments` | read | a task's comments as `LeanComment` rows, bodies as markdown |
 | `vikunja_get_comment` | read | one comment, by task + numeric `commentId` |
+| `vikunja_list_attachments` | read | every task attachment as lean metadata; pagination is exhausted |
+| `vikunja_get_attachment` | read | task-scoped bounded rich content: image/audio, UTF-8 text, or base64 blob |
 | `vikunja_create_task` | write | markdown description accepted; `assignees` ride along in the create |
 | `vikunja_create_tasks` | write | create many tasks in one project in one call — no native bulk endpoint, so it loops `PUT /projects/{p}/tasks`. Two-phase: resolves the project and every item's labels/assignees first (all-or-nothing; a bad name or empty array throws, writes nothing), then creates in order collecting `{ created, failed }` — the one write tool that reports per-item failure instead of throwing. Labels attach one-by-one after each create, so a created-but-unlabelled task is possible and its failure names the created id |
 | `vikunja_update_task` | write | partial fields incl. `done` |
@@ -80,6 +82,8 @@ primary reason this project exists.
 | `vikunja_delete_task` | write | isolated so it can be denied on its own |
 | `vikunja_delete_comment` | write | same isolation as `delete_task`, for one comment |
 | `vikunja_delete_label` | write | deletes the label itself; refuses while tasks carry it unless `force`, and reports how many lost it |
+| `vikunja_upload_attachments` | write | absolute local regular files up to 5 MiB each; validates the whole batch before multipart upload |
+| `vikunja_delete_attachment` | write | destructive, task-membership checked before deletion |
 
 Comments are the one thing here **not** addressed by key: they have no per-task sequence, so
 get/update/delete take the task (key or `{ id }`) plus the comment's global `commentId`. Both

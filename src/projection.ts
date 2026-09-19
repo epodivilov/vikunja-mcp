@@ -10,6 +10,7 @@ import type {
   BoardMode,
   LabelFields,
   LabelWrite,
+  LeanAttachment,
   LeanBoard,
   LeanColumn,
   LeanComment,
@@ -19,6 +20,7 @@ import type {
   LeanTask,
   LeanTaskDetail,
   LeanUser,
+  RawAttachment,
   RawBucket,
   RawComment,
   RawLabel,
@@ -136,6 +138,25 @@ function isCheckbox(node: DomNode): boolean {
 /** Drops Vikunja's zero timestamp so an unset date is absent rather than year 1. */
 export function nullableDate(raw: string): string | undefined {
   return !raw || raw === ZERO_DATE ? undefined : raw;
+}
+
+/** Projects attachment metadata without ever exposing the nested file or user objects. */
+export function toLeanAttachment(raw: RawAttachment): LeanAttachment {
+  const attachment: LeanAttachment = {
+    id: raw.id,
+    taskId: raw.task_id,
+    filename: raw.file.name,
+    mimeType: raw.file.mime,
+    size: raw.file.size,
+    created: raw.created,
+  };
+
+  const uploader = raw.created_by?.username?.trim();
+  if (uploader) {
+    attachment.uploader = uploader;
+  }
+
+  return attachment;
 }
 
 /** Six hex digits, with an optional leading `#` — the only colour Vikunja can actually render. */

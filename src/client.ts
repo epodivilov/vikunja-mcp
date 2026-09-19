@@ -1,3 +1,6 @@
+import { openAsBlob } from "node:fs";
+import { constants, access, lstat } from "node:fs/promises";
+import { basename, isAbsolute } from "node:path";
 /**
  * REST access to Vikunja. This module is the only place that performs network I/O,
  * which is what makes the "one host" rule enforceable: every request is built from
@@ -9,6 +12,8 @@
 import type { Config } from "./config.ts";
 import type {
   LabelWrite,
+  RawAttachment,
+  RawAttachmentUploadResult,
   RawBucket,
   RawComment,
   RawLabel,
@@ -19,6 +24,14 @@ import type {
   RelationKind,
   TaskWrite,
 } from "./types.ts";
+
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export type AttachmentPreviewSize = "sm" | "md" | "lg" | "xl";
+
+export interface AttachmentDownload {
+  bytes: Uint8Array;
+  contentType: string;
+}
 
 /**
  * An upper bound we ask for, not the page size we get. The server clamps `per_page` to its
@@ -573,6 +586,82 @@ export class VikunjaClient {
     return this.#requestAll<RawComment>(`/tasks/${taskId}/comments`);
   }
 
+  // --- attachments -----------------------------------------------------------
+
+  listAttachments(taskId: number): Promise<RawAttachment[]> {
+    return this.#requestAll<RawAttachment>(`/tasks/${taskId}/attachments`);
+  }
+
+  /** Validates the complete batch before constructing a request or contacting Vikunja. */
+  async uploadAttachments(
+    taskId: number,
+    paths: readonly string[],
+  ): Promise<RawAttachmentUploadResult> {
+    if (paths.length === 0) {
+      throw new Error("At least one attachment path is required.");
+    }
+
+    const files: Array<{ name: string; blob: Blob }> = [];
+    for (const path of paths) {
+      if (!isAbsolute(path)) {
+        throw new Error(`Attachment path "${path}" must be absolute.`);
+      }
+
+      let file: Awaited<ReturnType<typeof lstat>>;
+      try {
+        file = await lstat(path);
+      } catch {
+        throw new Error(`Attachment path "${path}" is missing or unreadable.`);
+      }
+      if (!file.isFile()) {
+        throw new Error(`Attachment path "${path}" is not a regular file.`);
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        throw new Error(
+          `Attachment path "${path}" is larger than the 5 MiB attachment limit (${file.size} bytes).`,
+        );
+      }
+
+      try {
+        await access(path, constants.R_OK);
+        files.push({ name: basename(path), blob: await openAsBlob(path) });
+      } catch {
+        throw new Error(`Attachment path "${path}" is missing or unreadable.`);
+      }
+    }
+
+    const form = new FormData();
+    for (const file of files) {
+      form.append("files", file.blob, file.name);
+    }
+
+    const response = await this.#requestObject<unknown>("PUT", `/tasks/${taskId}/attachments`, {
+      body: form,
+    });
+    return normaliseAttachmentUploadResult(response);
+  }
+
+  async getAttachment(
+    taskId: number,
+    attachmentId: number,
+    previewSize?: AttachmentPreviewSize,
+  ): Promise<AttachmentDownload> {
+    const query = previewSize === undefined ? undefined : { preview_size: previewSize };
+    const response = await this.#requestBytes(
+      "GET",
+      `/tasks/${taskId}/attachments/${attachmentId}`,
+      query,
+    );
+    return {
+      bytes: response.bytes,
+      contentType: response.headers.get("content-type") ?? "application/octet-stream",
+    };
+  }
+
+  async deleteAttachment(taskId: number, attachmentId: number): Promise<void> {
+    await this.#request<unknown>("DELETE", `/tasks/${taskId}/attachments/${attachmentId}`);
+  }
+
   createComment(taskId: number, comment: string): Promise<RawComment> {
     return this.#requestObject<RawComment>("PUT", `/tasks/${taskId}/comments`, {
       body: { comment },
@@ -696,41 +785,12 @@ export class VikunjaClient {
     path: string,
     options: RequestOptions = {},
   ): Promise<Response_<T>> {
-    const url = this.#url(path, options.query);
-
-    let response: Response;
+    const response = await this.#fetchResponse(method, path, options);
     let text: string;
     try {
-      response = await this.#fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bearer ${this.#config.token}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
-        // "one host" has to be enforced here rather than assumed: the default is to follow
-        // redirects, which would let the configured server hand our traffic to another origin.
-        redirect: "manual",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-      // Reading the body belongs inside the try. `fetch` settles as soon as headers arrive,
-      // so a stalled or reset connection — and the timeout above — fails here, not there.
       text = await response.text();
     } catch (cause) {
       throw new Error(`Vikunja ${method} ${path} failed: ${describeCause(cause)}`, { cause });
-    }
-
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location") ?? "no Location header";
-      throw new VikunjaHttpError(
-        `Vikunja ${method} ${path} -> HTTP ${response.status} redirecting to ${location}. ${REDIRECT_REFUSAL}`,
-        response.status,
-      );
-    }
-
-    if (!response.ok) {
-      throw httpError(method, path, response.status, text);
     }
 
     if (text === "") {
@@ -745,6 +805,111 @@ export class VikunjaClient {
         `Vikunja ${method} ${path} returned a non-JSON body (${hint}): ${truncate(text)}`,
       );
     }
+  }
+
+  async #requestBytes(
+    method: string,
+    path: string,
+    query?: Query,
+  ): Promise<{ bytes: Uint8Array; headers: Headers }> {
+    const response = await this.#fetchResponse(method, path, { query });
+    const declared = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_ATTACHMENT_BYTES) {
+      throw new Error(
+        `Vikunja ${method} ${path} returned ${declared} bytes, exceeding the 5 MiB attachment limit.`,
+      );
+    }
+
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      const reader = response.body?.getReader();
+      if (reader === undefined) {
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+          throw new Error(
+            `Vikunja ${method} ${path} returned more than the 5 MiB attachment limit.`,
+          );
+        }
+        return { bytes, headers: response.headers };
+      }
+
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        total += next.value.byteLength;
+        if (total > MAX_ATTACHMENT_BYTES) {
+          await reader.cancel();
+          throw new Error(
+            `Vikunja ${method} ${path} returned more than the 5 MiB attachment limit.`,
+          );
+        }
+        chunks.push(next.value);
+      }
+    } catch (cause) {
+      if (cause instanceof Error && /5 MiB attachment limit/.test(cause.message)) throw cause;
+      throw new Error(`Vikunja ${method} ${path} failed while reading the attachment.`, { cause });
+    }
+
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { bytes, headers: response.headers };
+  }
+
+  async #fetchResponse(
+    method: string,
+    path: string,
+    options: RequestOptions = {},
+  ): Promise<Response> {
+    const url = this.#url(path, options.query);
+    const multipart = options.body instanceof FormData;
+    let response: Response;
+    try {
+      response = await this.#fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.#config.token}`,
+          ...(multipart ? {} : { "Content-Type": "application/json" }),
+          Accept: multipart ? "application/json" : "application/json",
+        },
+        body:
+          options.body === undefined
+            ? undefined
+            : multipart
+              ? (options.body as FormData)
+              : JSON.stringify(options.body),
+        // "one host" has to be enforced here rather than assumed: the default is to follow
+        // redirects, which would let the configured server hand our traffic to another origin.
+        redirect: "manual",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (cause) {
+      throw new Error(`Vikunja ${method} ${path} failed: ${describeCause(cause)}`, { cause });
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location") ?? "no Location header";
+      throw new VikunjaHttpError(
+        `Vikunja ${method} ${path} -> HTTP ${response.status} redirecting to ${location}. ${REDIRECT_REFUSAL}`,
+        response.status,
+      );
+    }
+
+    if (!response.ok) {
+      let text = "";
+      try {
+        text = await response.text();
+      } catch {
+        // The status is still useful when an error body cannot be read.
+      }
+      throw httpError(method, path, response.status, text);
+    }
+
+    return response;
   }
 
   #url(path: string, query: Query = {}): string {
@@ -876,6 +1041,32 @@ function httpError(method: string, path: string, status: number, body: string): 
     status,
     code,
   );
+}
+
+function normaliseAttachmentUploadResult(value: unknown): RawAttachmentUploadResult {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(
+      "Vikunja attachment upload returned an invalid result without attachment metadata.",
+    );
+  }
+
+  const result = value as { success?: unknown; errors?: unknown };
+  const success = Array.isArray(result.success) ? (result.success as RawAttachment[]) : [];
+  const errors: Array<{ filename: string; error: string }> = [];
+  if (Array.isArray(result.errors)) {
+    for (const error of result.errors) {
+      if (typeof error === "object" && error !== null && "filename" in error && "error" in error) {
+        const row = error as { filename: unknown; error: unknown };
+        errors.push({ filename: String(row.filename), error: String(row.error) });
+      }
+    }
+  } else if (typeof result.errors === "object" && result.errors !== null) {
+    for (const [filename, error] of Object.entries(result.errors)) {
+      errors.push({ filename, error: String(error) });
+    }
+  }
+
+  return { success, errors };
 }
 
 function describeCause(cause: unknown): string {

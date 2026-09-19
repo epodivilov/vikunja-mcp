@@ -9,8 +9,47 @@
  * listing of a few hundred rows is exactly where this server is meant to be cheaper than the
  * alternatives it replaces.
  */
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import type { LeanAttachment } from "../types.ts";
 
 export function jsonResult(value: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+/** Builds protocol-native content while keeping metadata separate from the returned bytes. */
+export function attachmentResult(
+  attachment: LeanAttachment,
+  bytes: Uint8Array,
+  contentType: string,
+): CallToolResult {
+  const mimeType = contentType.split(";", 1)[0]?.trim().toLowerCase() || attachment.mimeType;
+  const metadata = JSON.stringify(attachment);
+  const base64 = Buffer.from(bytes).toString("base64");
+  const content: ContentBlock[] = [{ type: "text", text: metadata }];
+
+  if (mimeType.startsWith("image/")) {
+    content.push({ type: "image", data: base64, mimeType });
+  } else if (mimeType.startsWith("audio/")) {
+    content.push({ type: "audio", data: base64, mimeType });
+  } else if (mimeType.startsWith("text/")) {
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error(
+        `Attachment ${attachment.id} is labelled ${mimeType} but is not valid UTF-8 text; no attachment bytes were returned.`,
+      );
+    }
+    content.push({
+      type: "resource",
+      resource: { uri: `attachment://${attachment.id}`, mimeType, text },
+    });
+  } else {
+    content.push({
+      type: "resource",
+      resource: { uri: `attachment://${attachment.id}`, mimeType, blob: base64 },
+    });
+  }
+
+  return { content };
 }

@@ -20,7 +20,7 @@ import { registerGetTaskTool } from "../src/tools/get-task.ts";
 import { registerMoveTaskTool } from "../src/tools/move-task.ts";
 import type { RawTask } from "../src/types.ts";
 
-/** The 8 read tools of the CLAUDE.md surface table, each carrying `readOnlyHint`. */
+/** The 10 read tools of the CLAUDE.md surface table, each carrying `readOnlyHint`. */
 const READ_TOOLS = [
   "vikunja_list_projects",
   "vikunja_list_tasks",
@@ -30,9 +30,11 @@ const READ_TOOLS = [
   "vikunja_list_members",
   "vikunja_list_comments",
   "vikunja_get_comment",
+  "vikunja_list_attachments",
+  "vikunja_get_attachment",
 ];
 
-/** The 20 write tools of the same table, none of which may carry `readOnlyHint`. */
+/** The 22 write tools of the same table, none of which may carry `readOnlyHint`. */
 const WRITE_TOOLS = [
   "vikunja_create_task",
   "vikunja_create_tasks",
@@ -54,6 +56,8 @@ const WRITE_TOOLS = [
   "vikunja_delete_task",
   "vikunja_delete_comment",
   "vikunja_delete_label",
+  "vikunja_upload_attachments",
+  "vikunja_delete_attachment",
 ];
 
 /** Every tool the surface table names, and nothing else. */
@@ -154,9 +158,9 @@ describe("R1: the tool modules load under node --test", () => {
 });
 
 describe("R3: the registration list", () => {
-  it("registers exactly 28 tools and makes no network request", () => {
+  it("registers exactly 32 tools and makes no network request", () => {
     const tools = registerAll();
-    assert.equal(tools.size, 28);
+    assert.equal(tools.size, 32);
   });
 
   it("registers exactly the tools named in the CLAUDE.md surface table, and nothing else", () => {
