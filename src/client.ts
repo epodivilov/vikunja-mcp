@@ -1,5 +1,4 @@
-import { openAsBlob } from "node:fs";
-import { constants, access, lstat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 /**
  * REST access to Vikunja. This module is the only place that performs network I/O,
@@ -622,12 +621,18 @@ export class VikunjaClient {
         );
       }
 
+      let bytes: Buffer;
       try {
-        await access(path, constants.R_OK);
-        files.push({ name: basename(path), blob: await openAsBlob(path) });
+        bytes = await readFile(path);
       } catch {
         throw new Error(`Attachment path "${path}" is missing or unreadable.`);
       }
+      if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+        throw new Error(
+          `Attachment path "${path}" is larger than the 5 MiB attachment limit (${bytes.byteLength} bytes).`,
+        );
+      }
+      files.push({ name: basename(path), blob: new Blob([bytes]) });
     }
 
     const form = new FormData();
@@ -1051,19 +1056,25 @@ function normaliseAttachmentUploadResult(value: unknown): RawAttachmentUploadRes
   }
 
   const result = value as { success?: unknown; errors?: unknown };
-  const success = Array.isArray(result.success) ? (result.success as RawAttachment[]) : [];
-  const errors: Array<{ filename: string; error: string }> = [];
-  if (Array.isArray(result.errors)) {
-    for (const error of result.errors) {
-      if (typeof error === "object" && error !== null && "filename" in error && "error" in error) {
-        const row = error as { filename: unknown; error: unknown };
-        errors.push({ filename: String(row.filename), error: String(row.error) });
-      }
+  if (!Array.isArray(result.success) || !Array.isArray(result.errors)) {
+    throw new Error(
+      "Vikunja attachment upload returned an invalid result without attachment metadata.",
+    );
+  }
+
+  const success = result.success as RawAttachment[];
+  const errors: Array<{ code?: number; message: string }> = [];
+  for (const error of result.errors) {
+    if (typeof error !== "object" || error === null || !("message" in error)) {
+      throw new Error(
+        "Vikunja attachment upload returned an invalid result without attachment metadata.",
+      );
     }
-  } else if (typeof result.errors === "object" && result.errors !== null) {
-    for (const [filename, error] of Object.entries(result.errors)) {
-      errors.push({ filename, error: String(error) });
-    }
+    const row = error as { code?: unknown; message: unknown };
+    errors.push({
+      ...(typeof row.code === "number" ? { code: row.code } : {}),
+      message: String(row.message),
+    });
   }
 
   return { success, errors };

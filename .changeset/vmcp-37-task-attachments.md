@@ -1,4 +1,5 @@
 ---
+"@epodivilov/vikunja-mcp": minor
 ---
 
-<!-- VMCP-37 is an MCP surface addition; release notes are maintained in the task and PR. -->
+Add task attachment tools for uploading local files, listing metadata, returning rich MCP content, and deleting attachments with task-membership validation.

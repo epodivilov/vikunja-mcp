@@ -98,13 +98,13 @@ describe("attachment client", () => {
         request = init;
         return response({
           success: [attachment(22)],
-          errors: [{ filename: "two.bin", error: "no" }],
+          errors: [{ code: 4005, message: "The attachment is too large." }],
         });
       },
     });
 
     const result = await client.uploadAttachments(7, [first, second]);
-    assert.deepEqual(result.errors, [{ filename: "two.bin", error: "no" }]);
+    assert.deepEqual(result.errors, [{ code: 4005, message: "The attachment is too large." }]);
     assert.equal(result.success.length, 1);
     assert.ok(request?.body instanceof FormData);
     const files = (request?.body as FormData).getAll("files") as File[];
@@ -112,6 +112,38 @@ describe("attachment client", () => {
       files.map((file) => file.name),
       ["one.txt", "two.bin"],
     );
+  });
+
+  it("R7: refuses a malformed upload result instead of reporting an empty success", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vikunja-attachments-"));
+    const file = join(directory, "one.txt");
+    await writeFile(file, "one");
+    const client = new VikunjaClient(config, {
+      fetch: async () => response({ message: "legacy or malformed upload response" }),
+    });
+
+    await assert.rejects(
+      () => client.uploadAttachments(7, [file]),
+      /invalid result without attachment metadata/i,
+    );
+  });
+
+  it("R2: rejects relative paths, directories, and files over 5 MiB before a request", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vikunja-attachments-"));
+    const oversized = join(directory, "oversized.bin");
+    await writeFile(oversized, new Uint8Array(5 * 1024 * 1024 + 1));
+    let requests = 0;
+    const client = new VikunjaClient(config, {
+      fetch: async () => {
+        requests += 1;
+        return response({ success: [], errors: [] });
+      },
+    });
+
+    await assert.rejects(() => client.uploadAttachments(7, ["relative.txt"]), /absolute/i);
+    await assert.rejects(() => client.uploadAttachments(7, [directory]), /regular file/i);
+    await assert.rejects(() => client.uploadAttachments(7, [oversized]), /5 MiB/i);
+    assert.equal(requests, 0);
   });
 
   it("R3/R4: downloads a bounded attachment and passes preview_size", async () => {
@@ -178,6 +210,20 @@ describe("attachment MCP content", () => {
     assert.deepEqual(blob.content[1], {
       type: "resource",
       resource: { uri: "attachment://11", mimeType: "application/octet-stream", blob: "AQI=" },
+    });
+
+    const json = attachmentResult(
+      { ...metadata, mimeType: "application/json" },
+      new TextEncoder().encode('{"ok":true}'),
+      "application/json",
+    );
+    assert.deepEqual(json.content[1], {
+      type: "resource",
+      resource: {
+        uri: "attachment://11",
+        mimeType: "application/json",
+        text: '{"ok":true}',
+      },
     });
   });
 

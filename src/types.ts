@@ -415,7 +415,7 @@ export interface RawAttachment {
 
 export interface RawAttachmentUploadResult {
   success: RawAttachment[];
-  errors: Array<{ filename: string; error: string }>;
+  errors: Array<{ code?: number; message: string }>;
 }
 
 /**

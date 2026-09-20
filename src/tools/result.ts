@@ -31,7 +31,7 @@ export function attachmentResult(
     content.push({ type: "image", data: base64, mimeType });
   } else if (mimeType.startsWith("audio/")) {
     content.push({ type: "audio", data: base64, mimeType });
-  } else if (mimeType.startsWith("text/")) {
+  } else if (isTextMimeType(mimeType)) {
     let text: string;
     try {
       text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -52,4 +52,15 @@ export function attachmentResult(
   }
 
   return { content };
+}
+
+function isTextMimeType(mimeType: string): boolean {
+  return (
+    mimeType.startsWith("text/") ||
+    mimeType === "application/json" ||
+    mimeType.endsWith("+json") ||
+    mimeType === "application/xml" ||
+    mimeType.endsWith("+xml") ||
+    mimeType === "application/javascript"
+  );
 }
