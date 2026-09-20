@@ -20,9 +20,9 @@ import type { Config } from "../src/config.ts";
 import { toLeanTask, toTaskWrite } from "../src/projection.ts";
 import { Resolver } from "../src/resolver.ts";
 import {
+  applyBulkCreate,
   type CreateTaskSpec,
   type CreateTasksTarget,
-  applyBulkCreate,
 } from "../src/tools/task-target.ts";
 import type { CreatedTasks, RawLabel, RawProject, RawUser } from "../src/types.ts";
 

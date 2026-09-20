@@ -12,7 +12,7 @@ import { z } from "zod";
 import type { VikunjaClient } from "../client.ts";
 import { relatedProjectIds, toLeanTaskDetail } from "../projection.ts";
 import type { Resolver } from "../resolver.ts";
-import { RELATION_KINDS, parseRelationKind } from "../types.ts";
+import { parseRelationKind, RELATION_KINDS } from "../types.ts";
 import { jsonResult } from "./result.ts";
 import {
   OTHER_TASK_NAMES,

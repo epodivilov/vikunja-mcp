@@ -21,8 +21,8 @@ import type { Config } from "../src/config.ts";
 import { toLeanTask, toTaskWrite } from "../src/projection.ts";
 import { Resolver } from "../src/resolver.ts";
 import {
-  type BulkTaskTarget,
   applyBulkUpdate,
+  type BulkTaskTarget,
   findBulkBlockers,
   resolveBulkTargets,
 } from "../src/tools/task-target.ts";

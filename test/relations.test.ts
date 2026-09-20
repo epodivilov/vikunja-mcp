@@ -20,14 +20,14 @@ import { VikunjaClient } from "../src/client.ts";
 import type { Config } from "../src/config.ts";
 import { relatedProjectIds, toLeanTaskDetail } from "../src/projection.ts";
 import { Resolver } from "../src/resolver.ts";
-import { OTHER_TASK_NAMES, type TaskTarget, resolveTaskTarget } from "../src/tools/task-target.ts";
+import { OTHER_TASK_NAMES, resolveTaskTarget, type TaskTarget } from "../src/tools/task-target.ts";
 import {
   type LeanTaskDetail,
-  RELATION_KINDS,
+  parseRelationKind,
   type RawProject,
   type RawTask,
+  RELATION_KINDS,
   type RelationKind,
-  parseRelationKind,
 } from "../src/types.ts";
 
 const config: Config = { baseUrl: "http://vikunja.test/api/v1", token: "t0ken" };

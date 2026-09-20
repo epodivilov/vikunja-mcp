@@ -14,11 +14,20 @@
   "bugs": {
     "url": "https://github.com/epodivilov/vikunja-mcp/issues"
   },
-  "keywords": ["vikunja", "mcp", "model-context-protocol", "tasks", "todo", "productivity"],
+  "keywords": [
+    "vikunja",
+    "mcp",
+    "model-context-protocol",
+    "tasks",
+    "todo",
+    "productivity"
+  ],
   "bin": {
     "vikunja-mcp": "dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -41,20 +50,20 @@
     "prepublishOnly": "npm run check && npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "marked": "^14.0.0",
-    "turndown": "^7.2.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "marked": "^18.0.13",
+    "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.4",
-    "@changesets/cli": "^2.31.1",
-    "@types/node": "^22.0.0",
+    "@biomejs/biome": "^2.5.14",
+    "@changesets/cli": "^3.0.3",
+    "@types/node": "^22.20.4",
     "@types/turndown": "^5.0.5",
-    "typescript": "^5.6.0"
+    "typescript": "^7.0.2"
   },
   "allowScripts": {
-    "@biomejs/biome@1.9.4": true
+    "@biomejs/biome@2.5.14": true
   }
 }

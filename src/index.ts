@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { VikunjaClient, resolvePageSize } from "./client.ts";
+import { resolvePageSize, VikunjaClient } from "./client.ts";
 import { loadConfig } from "./config.ts";
 import { registerAllTools } from "./register-tools.ts";
 import { Resolver } from "./resolver.ts";

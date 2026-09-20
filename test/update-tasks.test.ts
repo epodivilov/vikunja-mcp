@@ -19,7 +19,7 @@ import { VikunjaClient } from "../src/client.ts";
 import type { Config } from "../src/config.ts";
 import { toLeanTask, toTaskWrite } from "../src/projection.ts";
 import { Resolver } from "../src/resolver.ts";
-import { type UpdateTaskSpec, applyTaskUpdates } from "../src/tools/task-target.ts";
+import { applyTaskUpdates, type UpdateTaskSpec } from "../src/tools/task-target.ts";
 import { updateItemSchema } from "../src/tools/update-tasks.ts";
 import type { RawProject, RawTask, UpdatedTasks } from "../src/types.ts";
 
