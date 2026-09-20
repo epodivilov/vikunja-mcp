@@ -879,7 +879,7 @@ export class VikunjaClient {
         headers: {
           Authorization: `Bearer ${this.#config.token}`,
           ...(multipart ? {} : { "Content-Type": "application/json" }),
-          Accept: multipart ? "application/json" : "application/json",
+          Accept: "application/json",
         },
         body:
           options.body === undefined
@@ -1056,15 +1056,18 @@ function normaliseAttachmentUploadResult(value: unknown): RawAttachmentUploadRes
   }
 
   const result = value as { success?: unknown; errors?: unknown };
-  if (!Array.isArray(result.success) || !Array.isArray(result.errors)) {
+  const successIsValid = result.success === null || Array.isArray(result.success);
+  const errorsAreValid = result.errors === null || Array.isArray(result.errors);
+  if (!("success" in result) || !("errors" in result) || !successIsValid || !errorsAreValid) {
     throw new Error(
       "Vikunja attachment upload returned an invalid result without attachment metadata.",
     );
   }
 
-  const success = result.success as RawAttachment[];
+  const success = (Array.isArray(result.success) ? result.success : []) as RawAttachment[];
+  const rawErrors = Array.isArray(result.errors) ? result.errors : [];
   const errors: Array<{ code?: number; message: string }> = [];
-  for (const error of result.errors) {
+  for (const error of rawErrors) {
     if (typeof error !== "object" || error === null || !("message" in error)) {
       throw new Error(
         "Vikunja attachment upload returned an invalid result without attachment metadata.",

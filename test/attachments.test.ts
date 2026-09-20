@@ -114,6 +114,28 @@ describe("attachment client", () => {
     );
   });
 
+  it("R2: normalises Vikunja's null slices in all-success and all-failure results", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vikunja-attachments-"));
+    const file = join(directory, "one.txt");
+    await writeFile(file, "one");
+    const responses = [
+      { success: [attachment(23)], errors: null },
+      { success: null, errors: [{ message: "upload refused" }] },
+    ];
+    const client = new VikunjaClient(config, {
+      fetch: async () => response(responses.shift()),
+    });
+
+    assert.deepEqual(await client.uploadAttachments(7, [file]), {
+      success: [attachment(23)],
+      errors: [],
+    });
+    assert.deepEqual(await client.uploadAttachments(7, [file]), {
+      success: [],
+      errors: [{ message: "upload refused" }],
+    });
+  });
+
   it("R7: refuses a malformed upload result instead of reporting an empty success", async () => {
     const directory = await mkdtemp(join(tmpdir(), "vikunja-attachments-"));
     const file = join(directory, "one.txt");
