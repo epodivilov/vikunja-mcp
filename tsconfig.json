@@ -6,6 +6,7 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
     "lib": ["ES2024"],
+    "types": ["node"],
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,

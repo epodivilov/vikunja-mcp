@@ -3,7 +3,7 @@
  * Vikunja itself does not perform. Nothing here talks to the network; every
  * function is pure so the mapping can be reasoned about on its own.
  */
-import { Renderer, marked } from "marked";
+import { marked, Renderer } from "marked";
 import TurndownService from "turndown";
 import { tables } from "turndown-plugin-gfm";
 import type {

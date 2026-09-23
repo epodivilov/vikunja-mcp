@@ -20,10 +20,10 @@ import type { Config } from "../src/config.ts";
 import { markdownToHtml, toLeanComment } from "../src/projection.ts";
 import { Resolver } from "../src/resolver.ts";
 import {
-  type UpdatedComment,
   applyCommentUpdate,
   resolveCommentTarget,
   resolveTaskTarget,
+  type UpdatedComment,
 } from "../src/tools/task-target.ts";
 import type { LeanComment, RawComment, RawProject, RawTask } from "../src/types.ts";
 

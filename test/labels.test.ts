@@ -31,13 +31,13 @@ import type { Config } from "../src/config.ts";
 import { toLabelWrite, toLeanLabel } from "../src/projection.ts";
 import { type LabelRef, Resolver } from "../src/resolver.ts";
 import {
-  type DeletedLabel,
-  type LabelProjection,
   applyLabelCreate,
   applyLabelDelete,
   applyLabelUpdate,
   checkLabelDeletable,
   checkLabelPatch,
+  type DeletedLabel,
+  type LabelProjection,
 } from "../src/tools/label-fields.ts";
 import type { LabelFields, LeanLabel, RawLabel, RawTask } from "../src/types.ts";
 

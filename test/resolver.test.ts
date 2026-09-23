@@ -7,11 +7,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  Resolver,
-  type ResolverClient,
   formatRef,
   parseProjectKey,
   parseTaskRef,
+  Resolver,
+  type ResolverClient,
 } from "../src/resolver.ts";
 import type { RawBucket, RawLabel, RawProject, RawTask, RawUser, RawView } from "../src/types.ts";
 

@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { describe, it } from "node:test";
-import { VikunjaClient, VikunjaHttpError, resolvePageSize } from "../src/client.ts";
+import { resolvePageSize, VikunjaClient, VikunjaHttpError } from "../src/client.ts";
 import type { Config } from "../src/config.ts";
 import type { RawLabel, RawTask } from "../src/types.ts";
 
