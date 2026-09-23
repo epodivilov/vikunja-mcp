@@ -1,5 +1,17 @@
 # @epodivilov/vikunja-mcp
 
+## 0.2.0
+
+### Minor Changes
+
+- 1933d71: Add `vikunja_create_tasks`: create many tasks in one project in a single call, returning `{ created, failed }` — resolves every project/label/assignee name first (all-or-nothing), then creates in order collecting per-item outcomes.
+- 1933d71: Add `vikunja_update_tasks`: update many tasks in one call, each with its own patch, returning `{ updated, failed }` — a heterogeneous read-modify-write loop that resolves every target first (all-or-nothing, refusing duplicate targets), then applies each patch collecting per-item outcomes. Unlike `vikunja_bulk_update_tasks` it preserves assignees, reminders and favourites.
+- 5b97ed7: Add task attachment tools for uploading local files, listing metadata, returning rich MCP content, and deleting attachments with task-membership validation.
+
+### Patch Changes
+
+- addabf1: Update runtime dependencies and development tooling to their latest stable releases.
+
 ## 0.1.0
 
 ### Minor Changes
