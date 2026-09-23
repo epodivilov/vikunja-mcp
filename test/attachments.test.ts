@@ -7,8 +7,7 @@ import { VikunjaClient } from "../src/client.ts";
 import type { Config } from "../src/config.ts";
 import { toLeanAttachment } from "../src/projection.ts";
 import { attachmentResult } from "../src/tools/result.ts";
-import type { LeanAttachment } from "../src/types.ts";
-import type { RawAttachment } from "../src/types.ts";
+import type { LeanAttachment, RawAttachment } from "../src/types.ts";
 
 const config: Config = { baseUrl: "http://vikunja.test/api/v1", token: "secret-token" };
 const attachment = (id: number, taskId = 7): RawAttachment => ({
@@ -53,7 +52,7 @@ describe("attachment client", () => {
     const calls: string[] = [];
     const client = new VikunjaClient(config, {
       pageSize: 2,
-      fetch: async (input, init) => {
+      fetch: async (input, _init) => {
         calls.push(String(input));
         const page = new URL(String(input)).searchParams.get("page");
         return response([attachment(Number(page))], { "x-pagination-total-pages": "2" });
@@ -107,7 +106,7 @@ describe("attachment client", () => {
     assert.deepEqual(result.errors, [{ code: 4005, message: "The attachment is too large." }]);
     assert.equal(result.success.length, 1);
     assert.ok(request?.body instanceof FormData);
-    const files = (request?.body as FormData).getAll("files") as File[];
+    const files = request.body.getAll("files") as File[];
     assert.deepEqual(
       files.map((file) => file.name),
       ["one.txt", "two.bin"],
