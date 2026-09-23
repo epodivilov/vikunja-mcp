@@ -227,6 +227,17 @@ export interface LeanComment {
   created: string;
 }
 
+/** Metadata for one task attachment. File bytes never cross the projection boundary. */
+export interface LeanAttachment {
+  id: number;
+  taskId: number;
+  filename: string;
+  mimeType: string;
+  size: number;
+  created: string;
+  uploader?: string;
+}
+
 /** Whether a kanban board's columns are hand-managed buckets or synthesized from per-column filters. */
 export type BoardMode = "manual" | "filter";
 
@@ -385,6 +396,26 @@ export interface RawComment {
   author: RawUser | null;
   /** RFC3339, e.g. "2026-07-24T18:21:09.315237Z". A real timestamp, not a nullable zero date. */
   created: string;
+}
+
+/** The nested shape returned by Vikunja's v1 task-attachment endpoints. */
+export interface RawAttachment {
+  id: number;
+  task_id: number;
+  created: string;
+  created_by: { username: string } | null;
+  file: {
+    id: number;
+    name: string;
+    mime: string;
+    size: number;
+    created: string;
+  };
+}
+
+export interface RawAttachmentUploadResult {
+  success: RawAttachment[];
+  errors: Array<{ code?: number; message: string }>;
 }
 
 /**

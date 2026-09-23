@@ -70,6 +70,8 @@ Read (safe to allow-list):
 - `vikunja_list_members` — the users a project's tasks can be assigned to
 - `vikunja_list_comments` — a task's comments, bodies as markdown and the author as a username
 - `vikunja_get_comment` — one comment, by task plus its numeric `commentId`
+- `vikunja_list_attachments` — every task attachment as lean metadata
+- `vikunja_get_attachment` — bounded rich attachment content as native MCP blocks or embedded resources
 
 Write (keep gated):
 
@@ -94,6 +96,8 @@ Write (keep gated):
 - `vikunja_delete_comment` — author-only as well
 - `vikunja_delete_label` — deletes the label itself, taking it off every task that carries it;
   refused while any task does unless `force` is passed
+- `vikunja_upload_attachments` — upload absolute local regular files up to 5 MiB each, with per-file failures
+- `vikunja_delete_attachment` — permanently delete one task attachment after membership validation
 
 Because each operation is its own tool, you can grant read access permanently while still
 reviewing every write:
@@ -109,7 +113,9 @@ reviewing every write:
       "mcp__vikunja__vikunja_get_board",
       "mcp__vikunja__vikunja_list_members",
       "mcp__vikunja__vikunja_list_comments",
-      "mcp__vikunja__vikunja_get_comment"
+      "mcp__vikunja__vikunja_get_comment",
+      "mcp__vikunja__vikunja_list_attachments",
+      "mcp__vikunja__vikunja_get_attachment"
     ]
   }
 }

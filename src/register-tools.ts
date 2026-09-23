@@ -10,6 +10,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { VikunjaClient } from "./client.ts";
 import type { Resolver } from "./resolver.ts";
 import { registerAssignTaskTool } from "./tools/assign-task.ts";
+import {
+  registerDeleteAttachmentTool,
+  registerGetAttachmentTool,
+  registerListAttachmentsTool,
+  registerUploadAttachmentsTool,
+} from "./tools/attachments.ts";
 import { registerBulkUpdateTasksTool } from "./tools/bulk-update-tasks.ts";
 import { registerCommentTaskTool } from "./tools/comment-task.ts";
 import { registerCompleteTaskTool } from "./tools/complete-task.ts";
@@ -57,6 +63,8 @@ export function registerAllTools(
   registerListMembersTool(server, client, resolver);
   registerListCommentsTool(server, client, resolver);
   registerGetCommentTool(server, client, resolver);
+  registerListAttachmentsTool(server, client, resolver);
+  registerGetAttachmentTool(server, client, resolver);
 
   // Write tools. One per operation, and never behind a shared `subcommand` argument: an MCP
   // client has to be able to allow creating a task without also allowing deleting one.
@@ -80,4 +88,6 @@ export function registerAllTools(
   registerDeleteTaskTool(server, client, resolver);
   registerDeleteCommentTool(server, client, resolver);
   registerDeleteLabelTool(server, client, resolver);
+  registerUploadAttachmentsTool(server, client, resolver);
+  registerDeleteAttachmentTool(server, client, resolver);
 }

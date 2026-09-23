@@ -16,11 +16,15 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { VikunjaClient } from "../src/client.ts";
 import { registerAllTools } from "../src/register-tools.ts";
 import type { Resolver } from "../src/resolver.ts";
+import {
+  registerDeleteAttachmentTool,
+  registerGetAttachmentTool,
+} from "../src/tools/attachments.ts";
 import { registerGetTaskTool } from "../src/tools/get-task.ts";
 import { registerMoveTaskTool } from "../src/tools/move-task.ts";
-import type { RawTask } from "../src/types.ts";
+import type { RawAttachment, RawTask } from "../src/types.ts";
 
-/** The 8 read tools of the CLAUDE.md surface table, each carrying `readOnlyHint`. */
+/** The 10 read tools of the CLAUDE.md surface table, each carrying `readOnlyHint`. */
 const READ_TOOLS = [
   "vikunja_list_projects",
   "vikunja_list_tasks",
@@ -30,9 +34,11 @@ const READ_TOOLS = [
   "vikunja_list_members",
   "vikunja_list_comments",
   "vikunja_get_comment",
+  "vikunja_list_attachments",
+  "vikunja_get_attachment",
 ];
 
-/** The 20 write tools of the same table, none of which may carry `readOnlyHint`. */
+/** The 22 write tools of the same table, none of which may carry `readOnlyHint`. */
 const WRITE_TOOLS = [
   "vikunja_create_task",
   "vikunja_create_tasks",
@@ -54,6 +60,8 @@ const WRITE_TOOLS = [
   "vikunja_delete_task",
   "vikunja_delete_comment",
   "vikunja_delete_label",
+  "vikunja_upload_attachments",
+  "vikunja_delete_attachment",
 ];
 
 /** Every tool the surface table names, and nothing else. */
@@ -154,9 +162,9 @@ describe("R1: the tool modules load under node --test", () => {
 });
 
 describe("R3: the registration list", () => {
-  it("registers exactly 28 tools and makes no network request", () => {
+  it("registers exactly 32 tools and makes no network request", () => {
     const tools = registerAll();
-    assert.equal(tools.size, 28);
+    assert.equal(tools.size, 32);
   });
 
   it("registers exactly the tools named in the CLAUDE.md surface table, and nothing else", () => {
@@ -306,5 +314,56 @@ describe("R6: move_task's board-mode guard", () => {
     if (block?.type !== "text") throw new Error("expected a single text content block");
     const payload = JSON.parse(block.text) as { ref: string };
     assert.equal(payload.ref, "INFRA-1");
+  });
+});
+
+describe("VMCP-37 R5: attachment membership guard", () => {
+  const resolver = {
+    resolveTask: async (): Promise<RawTask> => rawTask(530, 3, 1, "INFRA-1"),
+  };
+
+  it("refuses get before fetching content when the attachment is absent from the task", async () => {
+    let contentReads = 0;
+    const client = {
+      listAttachments: async (): Promise<RawAttachment[]> => [],
+      getAttachment: async () => {
+        contentReads += 1;
+        return { bytes: new Uint8Array(), contentType: "application/octet-stream" };
+      },
+    };
+    const handler = handlerOf(
+      registerGetAttachmentTool,
+      "vikunja_get_attachment",
+      client,
+      resolver,
+    );
+
+    await assert.rejects(
+      () => handler({ task: "INFRA-1", attachmentId: 91 }),
+      /Attachment 91 does not belong to task 530/,
+    );
+    assert.equal(contentReads, 0);
+  });
+
+  it("refuses delete before mutation when the attachment is absent from the task", async () => {
+    let deletes = 0;
+    const client = {
+      listAttachments: async (): Promise<RawAttachment[]> => [],
+      deleteAttachment: async (): Promise<void> => {
+        deletes += 1;
+      },
+    };
+    const handler = handlerOf(
+      registerDeleteAttachmentTool,
+      "vikunja_delete_attachment",
+      client,
+      resolver,
+    );
+
+    await assert.rejects(
+      () => handler({ task: "INFRA-1", attachmentId: 91 }),
+      /Attachment 91 does not belong to task 530/,
+    );
+    assert.equal(deletes, 0);
   });
 });
